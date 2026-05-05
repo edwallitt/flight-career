@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { trpc } from "../trpc.js";
 
 interface NavItem {
   to: string;
@@ -37,9 +38,18 @@ const NAV: NavItem[] = [
     to: "/hangar",
     code: "HGR",
     label: "Hangar",
-    enabled: false,
+    enabled: true,
     icon: (
       <ItemIcon d="M3 21V10l9-6 9 6v11M9 21v-7h6v7" />
+    ),
+  },
+  {
+    to: "/market",
+    code: "MKT",
+    label: "Market",
+    enabled: true,
+    icon: (
+      <ItemIcon d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
     ),
   },
   {
@@ -72,6 +82,13 @@ const NAV: NavItem[] = [
 ];
 
 export function Sidebar() {
+  const fleetQuery = trpc.hangar.fleet.useQuery(undefined, {
+    refetchInterval: 30_000,
+  });
+  const fleetCount = fleetQuery.data?.length ?? 0;
+  const badgeByCode: Record<string, string | null> = {
+    HGR: fleetCount > 0 ? String(fleetCount) : null,
+  };
   return (
     <aside className="flex w-[212px] shrink-0 flex-col border-r border-ink-600 bg-ink-800">
       {/* Wordmark block */}
@@ -140,6 +157,18 @@ export function Sidebar() {
                   {item.icon}
                 </span>
                 <span className="flex-1">{item.label}</span>
+                {badgeByCode[item.code] && (
+                  <span
+                    className={[
+                      "rounded-sm border px-1.5 py-0.5 font-mono text-[10px] tabular-nums",
+                      isActive && item.enabled
+                        ? "border-amber-deep/60 bg-amber-glow/[0.10] text-amber-glow"
+                        : "border-ink-600 bg-ink-750 text-muted",
+                    ].join(" ")}
+                  >
+                    {badgeByCode[item.code]}
+                  </span>
+                )}
                 <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
                   {item.code}
                 </span>

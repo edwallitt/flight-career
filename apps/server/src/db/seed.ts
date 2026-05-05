@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "./client.js";
 import {
+  aircraftListings,
   aircraftTypes,
   airports,
   career,
@@ -10,6 +11,7 @@ import {
 } from "./schema.js";
 import { aircraftSeed } from "./seed-data/aircraft.js";
 import { airportSeed } from "./seed-data/airports.js";
+import { refreshMarketplace, rngFromSeed } from "../services/marketplace.js";
 
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
 const ROLE_SCOPES = ["bush", "air_taxi", "light_jet"] as const;
@@ -128,6 +130,12 @@ async function seed() {
     db.insert(rentalFleet).values(rentalRows).onConflictDoNothing().run();
   }
 
+  // Marketplace: only seed initial listings if the table is empty.
+  const existingListings = db.select().from(aircraftListings).all().length;
+  if (existingListings === 0) {
+    refreshMarketplace(24, rngFromSeed(0x5eed_0001));
+  }
+
   const counts = {
     aircraftTypes: db.select().from(aircraftTypes).all().length,
     airports: db.select().from(airports).all().length,
@@ -135,6 +143,7 @@ async function seed() {
     reputation: db.select().from(reputation).all().length,
     career: db.select().from(career).all().length,
     rentalFleet: db.select().from(rentalFleet).all().length,
+    aircraftListings: db.select().from(aircraftListings).all().length,
   };
   console.log("Seed complete:", counts);
 }

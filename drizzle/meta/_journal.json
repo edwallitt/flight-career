@@ -57,6 +57,20 @@
       "when": 1777996704944,
       "tag": "0007_adorable_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1777997536540,
+      "tag": "0008_ancient_the_phantom",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1777998417770,
+      "tag": "0009_right_mandroid",
+      "breakpoints": true
     }
   ]
 }

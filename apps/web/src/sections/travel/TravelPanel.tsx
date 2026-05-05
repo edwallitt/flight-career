@@ -241,12 +241,23 @@ export function TravelPanel({ onClose }: { onClose: () => void }) {
                     className="w-full rounded-sm border border-ink-600 bg-ink-750 px-3 py-2 font-mono text-[13px] text-text-high outline-none focus:border-amber-deep"
                   >
                     <option value="">Select an aircraft…</option>
-                    {aircraftPool.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.tailNumber} · {a.manufacturer} {a.model} · @{" "}
-                        {a.currentLocationIcao}
-                      </option>
-                    ))}
+                    {aircraftPool.map((a) => {
+                      const unavailable = a.status !== "available";
+                      const suffix = unavailable
+                        ? ` · ${a.status.replace("_", " ").toUpperCase()}`
+                        : "";
+                      return (
+                        <option
+                          key={a.id}
+                          value={a.id}
+                          disabled={unavailable}
+                        >
+                          {a.tailNumber} · {a.manufacturer} {a.model} · @{" "}
+                          {a.currentLocationIcao} ({a.currentLocationName})
+                          {suffix}
+                        </option>
+                      );
+                    })}
                   </select>
                 )}
               </div>

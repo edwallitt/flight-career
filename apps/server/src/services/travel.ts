@@ -16,6 +16,7 @@ import {
 } from "../db/schema.js";
 import { fuelPriceCentsPerGal } from "./jobLifecycle.js";
 import { tickJobGeneration } from "./jobBoard.js";
+import { processLoanPayments } from "./purchase.js";
 
 export interface TransferRequest {
   type: TransferType;
@@ -234,6 +235,11 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
     } catch {
       // Tick failures are non-fatal — the next regular tick will catch up.
     }
+    try {
+      processLoanPayments();
+    } catch {
+      // Loan payment failures are non-fatal — they'll be picked up next tick.
+    }
   }
 
   return result;
@@ -246,6 +252,7 @@ export interface OwnedAircraftForTransfer {
   manufacturer: string;
   model: string;
   cls: "SEP" | "MEP" | "SET" | "JET";
+  status: "available" | "in_maintenance" | "in_flight" | "committed";
   currentLocationIcao: string;
   currentLocationName: string;
 }
@@ -256,7 +263,6 @@ export function listOwnedAircraftForTransfer(): OwnedAircraftForTransfer[] {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
-    .where(eq(ownedAircraft.status, "available"))
     .all();
   return rows.map(({ owned, type, ap }) => ({
     id: owned.id,
@@ -265,6 +271,7 @@ export function listOwnedAircraftForTransfer(): OwnedAircraftForTransfer[] {
     manufacturer: type.manufacturer,
     model: type.model,
     cls: type.class,
+    status: owned.status,
     currentLocationIcao: owned.currentLocationIcao,
     currentLocationName: ap.name,
   }));

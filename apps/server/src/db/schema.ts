@@ -156,6 +156,8 @@ export const loans = sqliteTable("loans", {
   interestRateBps: integer("interest_rate_bps").notNull(),
   nextPaymentDue: integer("next_payment_due").notNull(),
   termMonths: integer("term_months").notNull(),
+  originalTermMonths: integer("original_term_months").notNull().default(0),
+  paymentsMade: integer("payments_made").notNull().default(0),
 });
 
 export const rentalFleet = sqliteTable(
@@ -287,6 +289,31 @@ export const transfers = sqliteTable("transfers", {
   aircraftHoursAccrued: real("aircraft_hours_accrued").notNull(),
   fuelGallonsBurned: real("fuel_gallons_burned").notNull(),
   executedAt: integer("executed_at").notNull(),
+});
+
+export const aircraftListings = sqliteTable("aircraft_listings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  aircraftTypeId: text("aircraft_type_id")
+    .notNull()
+    .references(() => aircraftTypes.id),
+  tailNumber: text("tail_number").notNull(),
+  locationIcao: text("location_icao")
+    .notNull()
+    .references(() => airports.icao),
+  airframeHours: real("airframe_hours").notNull(),
+  engineHoursSinceOverhaul: real("engine_hours_since_overhaul").notNull(),
+  hoursSince100hr: real("hours_since_100hr").notNull(),
+  hoursSinceAnnual: real("hours_since_annual").notNull(),
+  askingPriceCents: integer("asking_price_cents").notNull(),
+  conditionGrade: text("condition_grade", {
+    enum: ["pristine", "excellent", "good", "fair", "project"],
+  }).notNull(),
+  listedAt: integer("listed_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  status: text("status", {
+    enum: ["available", "sold", "expired"],
+  }).notNull(),
+  descriptionShort: text("description_short"),
 });
 
 export const fuelPriceSnapshots = sqliteTable(

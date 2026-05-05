@@ -6,7 +6,9 @@ import { Sidebar } from "./components/Sidebar.js";
 import { BriefingScreen } from "./sections/active/BriefingScreen.js";
 import { CurrentJobModal } from "./sections/active/CurrentJobModal.js";
 import { InFlightSurface } from "./sections/flight/InFlightSurface.js";
+import { Hangar } from "./sections/hangar/Hangar.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
+import { Marketplace } from "./sections/marketplace/Marketplace.js";
 import { TravelPanel } from "./sections/travel/TravelPanel.js";
 
 type ActiveOverlay = "current" | "brief" | "travel" | null;
@@ -26,10 +28,8 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/jobs" replace />} />
             <Route path="/jobs" element={<JobBoard />} />
-            <Route
-              path="/hangar"
-              element={<ComingSoon title="Hangar" code="HGR" />}
-            />
+            <Route path="/hangar" element={<Hangar />} />
+            <Route path="/market" element={<Marketplace />} />
             <Route
               path="/career"
               element={<ComingSoon title="Career" code="CRW" />}

@@ -2,6 +2,7 @@ import {
   ALL_CLIENTS,
   computeReachability,
   getClientById,
+  haversineNm,
   runGenerationTick,
   type AircraftClass,
   type AirportLite,
@@ -84,6 +85,16 @@ function expireStaleJobs(simNow: number): number {
 
 function insertGenerated(generated: GeneratedJob[]): void {
   if (generated.length === 0) return;
+  // Invariant: every persisted job has distanceNm > 0. The shared generator
+  // computes distance via haversine for two distinct airports, so this should
+  // never trip — but if it does, fail loud rather than silently writing zero.
+  for (const j of generated) {
+    if (!(j.distanceNm > 0)) {
+      throw new Error(
+        `Refusing to insert job with distanceNm=${j.distanceNm} (${j.originIcao} → ${j.destinationIcao})`,
+      );
+    }
+  }
   db.insert(jobs)
     .values(
       generated.map((j) => ({
@@ -112,6 +123,43 @@ function insertGenerated(generated: GeneratedJob[]): void {
     .run();
 }
 
+// Heal jobs that were inserted before distance_nm was a populated column —
+// they sit at distance 0 until expired. Recompute from airport coordinates
+// for any open job older than 30 sim minutes that still reads zero.
+function backfillZeroDistance(simNow: number): number {
+  const STALE_MS = 30 * 60 * 1000;
+  const candidates = db
+    .select()
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.status, "open"),
+        eq(jobs.distanceNm, 0),
+        lt(jobs.generatedAt, simNow - STALE_MS),
+      ),
+    )
+    .all();
+  if (candidates.length === 0) return 0;
+  const airportRows = db.select().from(airports).all();
+  const byIcao = new Map<string, { lat: number; lon: number }>(
+    airportRows.map((a) => [a.icao, { lat: a.lat, lon: a.lon }]),
+  );
+  let healed = 0;
+  for (const job of candidates) {
+    const o = byIcao.get(job.originIcao);
+    const d = byIcao.get(job.destinationIcao);
+    if (!o || !d) continue;
+    const distance = Math.round(haversineNm(o, d));
+    if (distance <= 0) continue;
+    db.update(jobs)
+      .set({ distanceNm: distance })
+      .where(eq(jobs.id, job.id))
+      .run();
+    healed += 1;
+  }
+  return healed;
+}
+
 export interface TickResult {
   expired: number;
   inserted: number;
@@ -129,6 +177,7 @@ export function tickJobGeneration(): TickResult {
   db.update(career).set({ simDateTime: simNow }).where(eq(career.id, 1)).run();
 
   const expired = expireStaleJobs(simNow);
+  backfillZeroDistance(simNow);
 
   const airportsLite = buildAirportsLite();
   const generated = runGenerationTick(ALL_CLIENTS, {
