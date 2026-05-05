@@ -1,14 +1,26 @@
 import {
   ALL_CLIENTS,
+  computeReachability,
   getClientById,
   runGenerationTick,
+  type AircraftClass,
   type AirportLite,
   type GeneratedJob,
+  type JobReachability,
   type Role,
 } from "@flightcareer/shared";
 import { and, eq, lt } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { airports, career, jobs, reputation } from "../db/schema.js";
+import {
+  aircraftTypes,
+  airports,
+  career,
+  jobs,
+  ownedAircraft,
+  ratings,
+  rentalFleet,
+  reputation,
+} from "../db/schema.js";
 
 const TARGET_BOARD_SIZE = 12;
 const SIM_MINUTES_PER_TICK = 30;
@@ -93,6 +105,7 @@ function insertGenerated(generated: GeneratedJob[]): void {
         weatherSensitivity: j.weatherSensitivity,
         legsJson: j.legs ? JSON.stringify(j.legs) : null,
         description: j.description,
+        distanceNm: j.distanceNm,
         status: "open" as const,
       })),
     )
@@ -146,6 +159,7 @@ export interface JobListItem {
   requiredClass: "SEP" | "MEP" | "SET" | "JET";
   requiredCapabilities: string[];
   pay: number;
+  distanceNm: number;
   generatedAt: number;
   expiresAt: number;
   earliestDeparture: number | null;
@@ -178,6 +192,7 @@ function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
     requiredClass: row.requiredClass,
     requiredCapabilities: capabilities,
     pay: row.pay,
+    distanceNm: row.distanceNm,
     generatedAt: row.generatedAt,
     expiresAt: row.expiresAt,
     earliestDeparture: row.earliestDeparture,
@@ -196,6 +211,90 @@ export function getOpenJobs(): JobListItem[] {
     .all();
   rows.sort((a, b) => b.generatedAt - a.generatedAt);
   return rows.map(rowToListItem);
+}
+
+export interface JobListItemWithReachability extends JobListItem {
+  reachability: JobReachability;
+}
+
+export interface JobBoardWithReachability {
+  jobs: JobListItemWithReachability[];
+  playerLocationIcao: string;
+}
+
+export function getOpenJobsWithReachability(): JobBoardWithReachability {
+  const items = getOpenJobs();
+
+  const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
+  if (!careerRow) {
+    return {
+      jobs: items.map((j) => ({ ...j, reachability: { status: "unreachable" } })),
+      playerLocationIcao: "",
+    };
+  }
+
+  const playerLocationIcao = careerRow.currentLocationIcao;
+
+  const ratingRows = db.select().from(ratings).all();
+  const playerRatings: Record<AircraftClass, boolean> = {
+    SEP: false,
+    MEP: false,
+    SET: false,
+    JET: false,
+  };
+  for (const r of ratingRows) {
+    playerRatings[r.class] = r.earned;
+  }
+
+  const ownedRows = db
+    .select({ owned: ownedAircraft, type: aircraftTypes })
+    .from(ownedAircraft)
+    .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
+    .all();
+  const ownedAircraftCtx = ownedRows.map(({ owned, type }) => ({
+    aircraftTypeId: type.id,
+    currentLocationIcao: owned.currentLocationIcao,
+    cls: type.class,
+    rangeNm: type.rangeNm,
+    isAvailable: owned.status === "available",
+  }));
+
+  const rentalRows = db
+    .select({ rental: rentalFleet, type: aircraftTypes })
+    .from(rentalFleet)
+    .innerJoin(aircraftTypes, eq(rentalFleet.aircraftTypeId, aircraftTypes.id))
+    .where(eq(rentalFleet.airportIcao, playerLocationIcao))
+    .all();
+  const rentalsAtPlayerLocation = rentalRows.map(({ type }) => ({
+    aircraftTypeId: type.id,
+    cls: type.class,
+    rangeNm: type.rangeNm,
+  }));
+
+  const airportRows = db.select().from(airports).all();
+  const airportMap = new Map<string, { lat: number; lon: number }>(
+    airportRows.map((a) => [a.icao, { lat: a.lat, lon: a.lon }]),
+  );
+
+  const enriched = items.map<JobListItemWithReachability>((job) => ({
+    ...job,
+    reachability: computeReachability(
+      {
+        originIcao: job.originIcao,
+        requiredClass: job.requiredClass,
+        requiredCapabilities: job.requiredCapabilities,
+      },
+      {
+        playerLocationIcao,
+        playerRatings,
+        ownedAircraft: ownedAircraftCtx,
+        rentalsAtPlayerLocation,
+        airports: airportMap,
+      },
+    ),
+  }));
+
+  return { jobs: enriched, playerLocationIcao };
 }
 
 export interface JobDetail extends JobListItem {

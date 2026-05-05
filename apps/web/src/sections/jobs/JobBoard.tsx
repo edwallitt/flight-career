@@ -15,23 +15,26 @@ const CLASS_RANK: Record<string, number> = { SEP: 0, MEP: 1, SET: 2, JET: 3 };
 export function JobBoard() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [classFilter, setClassFilter] = useState<ClassFilter>("any");
+  const [reachableOnly, setReachableOnly] = useState(true);
   const [sort, setSort] = useState<SortState>({ key: "pay", dir: "desc" });
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const utils = trpc.useUtils();
-  const list = trpc.jobs.list.useQuery(undefined, {
+  const list = trpc.jobs.listWithReachability.useQuery(undefined, {
     refetchInterval: 10_000,
   });
   const career = trpc.career.get.useQuery();
   const tickNow = trpc.jobs.tickNow.useMutation({
     onSuccess: () => {
       utils.jobs.list.invalidate();
+      utils.jobs.listWithReachability.invalidate();
       utils.career.get.invalidate();
     },
   });
   const lastTick = tickNow.data;
 
-  const allJobs: JobRow[] = list.data ?? [];
+  const allJobs: JobRow[] = list.data?.jobs ?? [];
+  const playerLocationIcao = list.data?.playerLocationIcao ?? "";
 
   const filteredJobs = useMemo(() => {
     return allJobs.filter((j) => {
@@ -42,9 +45,12 @@ export function JobBoard() {
       ) {
         return false;
       }
+      if (reachableOnly && j.reachability.status === "unreachable") {
+        return false;
+      }
       return true;
     });
-  }, [allJobs, roleFilter, classFilter]);
+  }, [allJobs, roleFilter, classFilter, reachableOnly]);
 
   const simNow = career.data?.simDateTime ?? Date.now();
   const drawerOpen = selectedId != null;
@@ -106,6 +112,8 @@ export function JobBoard() {
         setRoleFilter={setRoleFilter}
         classFilter={classFilter}
         setClassFilter={setClassFilter}
+        reachableOnly={reachableOnly}
+        setReachableOnly={setReachableOnly}
         totalCount={allJobs.length}
         filteredCount={filteredJobs.length}
         onTickNow={() => tickNow.mutate()}
@@ -128,12 +136,19 @@ export function JobBoard() {
           }
           simNow={simNow}
           isLoading={list.isPending}
+          playerLocationIcao={playerLocationIcao}
         />
 
         <JobDrawer
           jobId={selectedId}
           onClose={() => setSelectedId(null)}
           simNow={simNow}
+          reachability={
+            selectedId != null
+              ? allJobs.find((j) => j.id === selectedId)?.reachability ?? null
+              : null
+          }
+          playerLocationIcao={playerLocationIcao}
         />
       </div>
     </div>

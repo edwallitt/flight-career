@@ -39,6 +39,7 @@ export interface GeneratedJob {
   requiredClass: AircraftClass;
   requiredCapabilities: string[];
   pay: number;
+  distanceNm: number;
   generatedAt: number;
   expiresAt: number;
   earliestDeparture: number | null;
@@ -190,6 +191,7 @@ function concretizeFromTemplate(
     requiredClass: template.minClass,
     requiredCapabilities: [...template.requiredCapabilities],
     pay,
+    distanceNm: Math.round(distanceNm),
     generatedAt: ctx.simNow,
     expiresAt,
     earliestDeparture: earliest,
@@ -329,6 +331,7 @@ function buildOpenMarketJob(ctx: GenerationContext): GeneratedJob | null {
     requiredClass,
     requiredCapabilities: [],
     pay,
+    distanceNm: Math.round(distanceNm),
     generatedAt: ctx.simNow,
     expiresAt: ctx.simNow + 4 * HOUR_MS,
     earliestDeparture: null,

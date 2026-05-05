@@ -7,10 +7,37 @@ import {
 } from "../../lib/formatters.js";
 import type {
   JobRow,
+  ReachabilityStatus,
   SortDir,
   SortKey,
   SortState,
 } from "./types.js";
+
+const REACH_DOT: Record<ReachabilityStatus, string> = {
+  at_origin: "bg-emerald-400 shadow-[0_0_6px_rgba(74,222,128,0.55)]",
+  owned_at_origin: "bg-sky-400 shadow-[0_0_6px_rgba(96,165,250,0.55)]",
+  reposition_rental: "bg-amber-glow shadow-[0_0_6px_rgba(212,165,116,0.55)]",
+  unreachable: "bg-ink-500",
+};
+
+function reachTooltip(
+  status: ReachabilityStatus,
+  job: JobRow,
+  playerLocationIcao: string,
+): string {
+  switch (status) {
+    case "at_origin":
+      return "At your location";
+    case "owned_at_origin":
+      return `You have an aircraft at ${job.originIcao}`;
+    case "reposition_rental":
+      return `Reposition required: ${
+        job.reachability.positioningDistanceNm ?? "?"
+      }nm from ${playerLocationIcao}`;
+    case "unreachable":
+      return `Unreachable from ${playerLocationIcao}`;
+  }
+}
 
 const URGENCY_COLOR: Record<JobRow["urgency"], string> = {
   critical: "text-urgency-critical",
@@ -36,7 +63,14 @@ interface ColumnDef {
 
 const COLUMNS: ColumnDef[] = [
   { key: "client", label: "Client / Role", sortable: true },
-  { key: "route", label: "Route", sortable: true, width: "minmax(180px, 1fr)" },
+  { key: "route", label: "Route", sortable: true, width: "minmax(200px, 1fr)" },
+  {
+    key: "distance",
+    label: "Dist",
+    sortable: true,
+    align: "right",
+    width: "90px",
+  },
   { key: "class", label: "Min", sortable: true, align: "center", width: "70px" },
   {
     key: "payload",
@@ -64,7 +98,7 @@ const COLUMNS: ColumnDef[] = [
 ];
 
 const GRID_TEMPLATE =
-  "minmax(220px, 1.4fr) minmax(180px, 1fr) 70px 120px 120px 130px 80px 112px";
+  "minmax(220px, 1.4fr) minmax(200px, 1fr) 90px 70px 120px 120px 130px 80px 112px";
 
 function compare(a: JobRow, b: JobRow, key: SortKey): number {
   switch (key) {
@@ -81,6 +115,8 @@ function compare(a: JobRow, b: JobRow, key: SortKey): number {
       return a.payloadLbs - b.payloadLbs;
     case "pay":
       return a.pay - b.pay;
+    case "distance":
+      return a.distanceNm - b.distanceNm;
     case "expires":
       return a.expiresAt - b.expiresAt;
     case "urgency": {
@@ -175,6 +211,7 @@ export function JobTable({
   onSelect,
   simNow,
   isLoading,
+  playerLocationIcao,
 }: {
   jobs: JobRow[];
   sort: SortState;
@@ -183,6 +220,7 @@ export function JobTable({
   onSelect: (job: JobRow) => void;
   simNow: number;
   isLoading: boolean;
+  playerLocationIcao: string;
 }) {
   const sortedJobs = useMemo(() => {
     const sorted = [...jobs].sort((a, b) => {
@@ -198,7 +236,10 @@ export function JobTable({
     } else {
       onSortChange({
         key,
-        dir: key === "pay" || key === "payload" ? "desc" : "asc",
+        dir:
+          key === "pay" || key === "payload" || key === "distance"
+            ? "desc"
+            : "asc",
       });
     }
   };
@@ -262,6 +303,8 @@ export function JobTable({
           const expiresIn = formatRelativeFromNow(job.expiresAt, simNow);
           const isOpen = job.role === "open";
 
+          const isUnreachable = job.reachability.status === "unreachable";
+
           return (
             <button
               key={job.id}
@@ -275,7 +318,10 @@ export function JobTable({
                   : idx % 2 === 0
                   ? "bg-transparent hover:bg-ink-700/40"
                   : "bg-ink-800/30 hover:bg-ink-700/40",
-              ].join(" ")}
+                isUnreachable && "opacity-50",
+              ]
+                .filter(Boolean)
+                .join(" ")}
               style={{ gridTemplateColumns: GRID_TEMPLATE }}
             >
               {/* Selected indicator bar */}
@@ -305,6 +351,22 @@ export function JobTable({
 
               {/* Route */}
               <div className="flex items-center gap-2 font-mono text-text-high">
+                <span
+                  className={[
+                    "h-1.5 w-1.5 flex-none rounded-full",
+                    REACH_DOT[job.reachability.status],
+                  ].join(" ")}
+                  title={reachTooltip(
+                    job.reachability.status,
+                    job,
+                    playerLocationIcao,
+                  )}
+                  aria-label={reachTooltip(
+                    job.reachability.status,
+                    job,
+                    playerLocationIcao,
+                  )}
+                />
                 <span className="icao text-sm">{job.originIcao}</span>
                 <span className="flex items-center gap-1 text-muted-faint">
                   <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden>
@@ -319,6 +381,16 @@ export function JobTable({
                   </svg>
                 </span>
                 <span className="icao text-sm">{job.destinationIcao}</span>
+              </div>
+
+              {/* Distance */}
+              <div className="flex flex-col items-end">
+                <span className="font-mono tabular-nums text-[13px] text-text-high">
+                  {job.distanceNm > 0 ? job.distanceNm.toLocaleString() : "—"}
+                  {job.distanceNm > 0 && (
+                    <span className="ml-1 text-muted-dim">nm</span>
+                  )}
+                </span>
               </div>
 
               {/* Class */}

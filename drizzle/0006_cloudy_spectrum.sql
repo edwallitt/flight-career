@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `distance_nm` real DEFAULT 0 NOT NULL;

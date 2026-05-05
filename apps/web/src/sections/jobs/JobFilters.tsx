@@ -21,6 +21,8 @@ export function JobFilters({
   setRoleFilter,
   classFilter,
   setClassFilter,
+  reachableOnly,
+  setReachableOnly,
   totalCount,
   filteredCount,
   onTickNow,
@@ -31,6 +33,8 @@ export function JobFilters({
   setRoleFilter: (r: RoleFilter) => void;
   classFilter: ClassFilter;
   setClassFilter: (c: ClassFilter) => void;
+  reachableOnly: boolean;
+  setReachableOnly: (v: boolean) => void;
   totalCount: number;
   filteredCount: number;
   onTickNow: () => void;
@@ -93,6 +97,32 @@ export function JobFilters({
             );
           })}
         </div>
+      </div>
+
+      {/* Reachability toggle */}
+      <div className="flex flex-col gap-1.5">
+        <span className="label">Reach</span>
+        <button
+          type="button"
+          onClick={() => setReachableOnly(!reachableOnly)}
+          className={[
+            "relative inline-flex items-center gap-2 rounded-sm border px-3 py-1.5 font-mono text-[11px] uppercase tracking-callsign transition-colors",
+            reachableOnly
+              ? "border-amber-deep bg-amber-glow/[0.08] text-amber-glow hover:bg-amber-glow/[0.14]"
+              : "border-ink-600 bg-ink-750 text-muted-dim hover:text-text",
+          ].join(" ")}
+          aria-pressed={reachableOnly}
+        >
+          <span
+            className={[
+              "h-1.5 w-1.5 rounded-full",
+              reachableOnly
+                ? "bg-amber-glow shadow-[0_0_6px_rgba(212,165,116,0.6)]"
+                : "bg-ink-500",
+            ].join(" ")}
+          />
+          Reachable only
+        </button>
       </div>
 
       <div className="flex-1" />

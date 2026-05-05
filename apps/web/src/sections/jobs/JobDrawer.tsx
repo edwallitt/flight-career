@@ -9,6 +9,13 @@ import {
 } from "../../lib/formatters.js";
 import { AircraftCandidatesPanel } from "../active/AircraftCandidatesPanel.js";
 import type { AircraftSelection } from "../active/types.js";
+import type { ReachabilityStatus } from "./types.js";
+
+interface ReachabilityInfo {
+  status: ReachabilityStatus;
+  positioningDistanceNm?: number;
+  positioningCandidateTypeId?: string;
+}
 
 const URGENCY_TONE: Record<string, string> = {
   critical: "border-urgency-critical/70 text-urgency-critical bg-urgency-critical/[0.08]",
@@ -28,6 +35,60 @@ const WEATHER_TONE: Record<string, string> = {
   mild: "text-sky-300",
   strict: "text-amber-glow",
 };
+
+function ReachabilityBanner({
+  reachability,
+  originIcao,
+  playerLocationIcao,
+  tailNumber,
+}: {
+  reachability: ReachabilityInfo;
+  originIcao: string;
+  playerLocationIcao: string;
+  tailNumber: string | null;
+}) {
+  let tone = "";
+  let text: React.ReactNode = "";
+  switch (reachability.status) {
+    case "at_origin":
+      tone = "text-emerald-300 border-emerald-500/40 bg-emerald-500/[0.06]";
+      text = "Departing from your location";
+      break;
+    case "owned_at_origin":
+      tone = "text-sky-300 border-sky-500/40 bg-sky-500/[0.06]";
+      text = (
+        <>
+          {tailNumber ? `Your ${tailNumber}` : "Your aircraft"} is at{" "}
+          <span className="icao">{originIcao}</span>
+        </>
+      );
+      break;
+    case "reposition_rental":
+      tone = "text-amber-glow border-amber-deep/60 bg-amber-glow/[0.06]";
+      text = (
+        <>
+          Requires {reachability.positioningDistanceNm ?? "?"}nm reposition from{" "}
+          <span className="icao">{playerLocationIcao}</span>
+        </>
+      );
+      break;
+    case "unreachable":
+      tone =
+        "text-urgency-critical border-urgency-critical/40 bg-urgency-critical/[0.06]";
+      text = "Unreachable from your current location";
+      break;
+  }
+  return (
+    <div
+      className={[
+        "rounded-sm border px-3 py-2 font-mono text-[11px] uppercase tracking-callsign",
+        tone,
+      ].join(" ")}
+    >
+      {text}
+    </div>
+  );
+}
 
 function CloseIcon() {
   return (
@@ -70,16 +131,24 @@ export function JobDrawer({
   jobId,
   onClose,
   simNow,
+  reachability,
+  playerLocationIcao,
 }: {
   jobId: number | null;
   onClose: () => void;
   simNow: number;
+  reachability: ReachabilityInfo | null;
+  playerLocationIcao: string;
 }) {
   const detail = trpc.jobs.getById.useQuery(
     { id: jobId ?? -1 },
     { enabled: jobId != null },
   );
   const activeJob = trpc.lifecycle.getActiveJob.useQuery();
+  const candidates = trpc.aircraft.candidatesForJob.useQuery(
+    { jobId: jobId ?? -1 },
+    { enabled: jobId != null },
+  );
   const utils = trpc.useUtils();
   const acceptMutation = trpc.lifecycle.accept.useMutation({
     onSuccess: (result) => {
@@ -112,6 +181,28 @@ export function JobDrawer({
       : acceptMutation.error
         ? acceptMutation.error.message
         : null;
+
+  const isUnreachable = reachability?.status === "unreachable";
+
+  const selectedTypeId =
+    selection?.source === "owned"
+      ? selection.aircraftTypeId
+      : selection?.source === "rental"
+        ? selection.rentalAircraftTypeId
+        : null;
+  const selectedDisplay = selectedTypeId
+    ? candidates.data?.ranked.find(
+        (r) => r.candidate.aircraftTypeId === selectedTypeId,
+      )?.display ?? null
+    : null;
+  const selectedTailNumber =
+    selection?.source === "owned"
+      ? candidates.data?.ranked.find(
+          (r) =>
+            r.candidate.source === "owned" &&
+            r.candidate.ownedAircraftId === selection.ownedAircraftId,
+        )?.candidate.tailNumber ?? null
+      : null;
 
   return (
     <aside
@@ -162,6 +253,16 @@ export function JobDrawer({
           </div>
         ) : (
           <>
+            {/* Reachability status line */}
+            {reachability && (
+              <ReachabilityBanner
+                reachability={reachability}
+                originIcao={job.originIcao}
+                playerLocationIcao={playerLocationIcao}
+                tailNumber={selectedTailNumber}
+              />
+            )}
+
             {/* Route block */}
             <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
               <div className="flex items-center justify-between">
@@ -268,6 +369,48 @@ export function JobDrawer({
                 </span>
               </Field>
 
+              <Field label="Distance">
+                {job.distanceNm > 0 ? (
+                  <span className="tabular-nums">
+                    {job.distanceNm.toLocaleString()}{" "}
+                    <span className="text-muted">nm</span>
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </Field>
+              <Field label="Rate" align="right">
+                {job.distanceNm > 0 ? (
+                  <span className="tabular-nums text-amber-warm">
+                    ${(job.pay / 100 / job.distanceNm).toFixed(2)}{" "}
+                    <span className="text-muted-dim">/ nm</span>
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </Field>
+
+              {selectedDisplay && job.distanceNm > 0 && (
+                <Field label="Est. block time">
+                  {(() => {
+                    const hours =
+                      job.distanceNm /
+                      Math.max(1, selectedDisplay.cruiseSpeedKts);
+                    const h = Math.floor(hours);
+                    const m = Math.round((hours - h) * 60);
+                    return (
+                      <span className="tabular-nums">
+                        {h}h {String(m).padStart(2, "0")}m
+                        <span className="ml-1 text-muted-dim">
+                          ({job.distanceNm}nm at{" "}
+                          {selectedDisplay.cruiseSpeedKts}kts cruise)
+                        </span>
+                      </span>
+                    );
+                  })()}
+                </Field>
+              )}
+
               {job.requiredCapabilities.length > 0 && (
                 <Field label="Capabilities">
                   <div className="flex flex-wrap gap-1">
@@ -334,7 +477,16 @@ export function JobDrawer({
         <button
           type="button"
           disabled={
-            !job || !selection || hasActiveJob || acceptMutation.isPending
+            !job ||
+            !selection ||
+            hasActiveJob ||
+            isUnreachable ||
+            acceptMutation.isPending
+          }
+          title={
+            isUnreachable
+              ? "Cannot accept — no aircraft can reach the origin from your current location."
+              : undefined
           }
           onClick={() => {
             if (!job || !selection) return;
@@ -365,6 +517,10 @@ export function JobDrawer({
         <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
           {errorMsg ? (
             <span className="text-urgency-critical">{errorMsg}</span>
+          ) : isUnreachable ? (
+            <span className="text-urgency-critical">
+              No aircraft can reach the origin from your current location
+            </span>
           ) : hasActiveJob ? (
             "Active job in progress — open it from the header"
           ) : !selection ? (

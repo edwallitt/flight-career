@@ -23,8 +23,10 @@ const STARTING_ROLE_REPUTATION = 25;
 // Rental availability rules. Order matters only for readability — types are
 // deduplicated below before insertion.
 const BASE_RENTAL_TYPES = ["c172", "bonanza_g36", "da40"] as const;
+const SMALL_RENTAL_TYPES = ["c172", "bonanza_g36"] as const;
 const MEP_RENTAL_TYPES = ["baron_g58", "da42"] as const;
-const HEAVY_SET_RENTAL_TYPES = ["caravan", "kodiak", "tbm930"] as const;
+const SET_RENTAL_TYPES = ["caravan", "kodiak"] as const;
+const TBM_RENTAL_TYPES = ["tbm930"] as const;
 const MAJOR_ONLY_RENTAL_TYPES = [
   "pc12",
   "cj4",
@@ -32,15 +34,34 @@ const MAJOR_ONLY_RENTAL_TYPES = [
   "vision_jet",
 ] as const;
 
-function rentalTypesFor(size: string, longestRunwayFt: number): string[] {
+function rentalTypesFor(
+  size: string,
+  longestRunwayFt: number,
+  hasPavedRunway: boolean,
+): string[] {
+  // Small fields with a paved runway long enough for trainers get a tiny
+  // fleet so the player isn't stranded after diverting to one.
+  if (size === "small") {
+    if (hasPavedRunway && longestRunwayFt >= 3500) {
+      return [...SMALL_RENTAL_TYPES];
+    }
+    return [];
+  }
+
   if (size !== "major" && size !== "regional") return [];
+
   const types = new Set<string>(BASE_RENTAL_TYPES);
-  if (longestRunwayFt >= 5000) {
-    for (const id of MEP_RENTAL_TYPES) types.add(id);
+
+  // All regionals (and majors) get an MEP option.
+  for (const id of MEP_RENTAL_TYPES) types.add(id);
+
+  if (longestRunwayFt >= 4500) {
+    for (const id of SET_RENTAL_TYPES) types.add(id);
   }
-  if (longestRunwayFt >= 6000) {
-    for (const id of HEAVY_SET_RENTAL_TYPES) types.add(id);
+  if (longestRunwayFt >= 5500) {
+    for (const id of TBM_RENTAL_TYPES) types.add(id);
   }
+
   if (size === "major") {
     for (const id of MAJOR_ONLY_RENTAL_TYPES) types.add(id);
   }
@@ -95,7 +116,11 @@ async function seed() {
   // (airport_icao, aircraft_type_id) index + onConflictDoNothing.
   const rentalRows: { airportIcao: string; aircraftTypeId: string }[] = [];
   for (const ap of airportSeed) {
-    for (const typeId of rentalTypesFor(ap.size, ap.longestRunwayFt)) {
+    for (const typeId of rentalTypesFor(
+      ap.size,
+      ap.longestRunwayFt,
+      ap.hasPavedRunway,
+    )) {
       rentalRows.push({ airportIcao: ap.icao, aircraftTypeId: typeId });
     }
   }
