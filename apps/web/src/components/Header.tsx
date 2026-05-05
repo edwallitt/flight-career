@@ -1,5 +1,6 @@
 import { trpc } from "../trpc.js";
 import { formatCash, formatSimDateTime } from "../lib/formatters.js";
+import { ActiveJobPill } from "../sections/active/ActiveJobPill.js";
 
 function StatBlock({
   label,
@@ -54,7 +55,11 @@ function CogIcon() {
   );
 }
 
-export function Header() {
+export function Header({
+  onOpenActiveJob,
+}: {
+  onOpenActiveJob: () => void;
+}) {
   const career = trpc.career.get.useQuery(undefined, {
     refetchInterval: 5_000,
   });
@@ -106,6 +111,11 @@ export function Header() {
       />
 
       <div className="flex-1" />
+
+      {/* Active job pill — only renders when there's an active job. */}
+      <div className="flex items-center px-3">
+        <ActiveJobPill onOpen={onOpenActiveJob} />
+      </div>
 
       {/* Right rail: status + settings */}
       <div className="flex items-center gap-4 border-l border-ink-600 px-5">

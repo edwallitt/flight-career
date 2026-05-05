@@ -5,6 +5,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 // =============================================================================
@@ -67,6 +68,23 @@ export const career = sqliteTable("career", {
   simDateTime: integer("sim_date_time").notNull(),
   lastPlayedAt: integer("last_played_at").notNull(),
   startedAt: integer("started_at").notNull(),
+  // Active job tracking. All five active_* and briefed_* columns move
+  // together: cleared on completion or cancellation, populated on accept.
+  activeJobId: integer("active_job_id").references((): AnySQLiteColumn => jobs.id),
+  activeAircraftSource: text("active_aircraft_source", {
+    enum: ["owned", "rental"],
+  }),
+  activeAircraftOwnedId: integer("active_aircraft_owned_id").references(
+    (): AnySQLiteColumn => ownedAircraft.id,
+  ),
+  activeAircraftRentalTypeId: text("active_aircraft_rental_type_id").references(
+    () => aircraftTypes.id,
+  ),
+  activeFlightState: text("active_flight_state", {
+    enum: ["accepted", "briefed", "in_progress"],
+  }),
+  briefedFuelGallons: real("briefed_fuel_gallons"),
+  briefedFuelCostCents: integer("briefed_fuel_cost_cents"),
 });
 
 export const ratings = sqliteTable("ratings", {
@@ -138,6 +156,25 @@ export const loans = sqliteTable("loans", {
   nextPaymentDue: integer("next_payment_due").notNull(),
   termMonths: integer("term_months").notNull(),
 });
+
+export const rentalFleet = sqliteTable(
+  "rental_fleet",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    airportIcao: text("airport_icao")
+      .notNull()
+      .references(() => airports.icao),
+    aircraftTypeId: text("aircraft_type_id")
+      .notNull()
+      .references(() => aircraftTypes.id),
+  },
+  (t) => ({
+    airportTypeUnique: uniqueIndex("rental_fleet_airport_type_unique").on(
+      t.airportIcao,
+      t.aircraftTypeId,
+    ),
+  }),
+);
 
 // =============================================================================
 // Job board

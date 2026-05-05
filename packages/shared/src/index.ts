@@ -9,3 +9,4 @@ export type HealthPingResult = z.infer<typeof healthPingResultSchema>;
 
 export * from "./clients/index.js";
 export * from "./jobs/index.js";
+export * from "./aircraft/index.js";

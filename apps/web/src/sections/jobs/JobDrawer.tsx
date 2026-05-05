@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { trpc } from "../../trpc.js";
 import {
   formatPay,
@@ -6,6 +7,8 @@ import {
   formatSimDateTime,
   ROLE_LABEL,
 } from "../../lib/formatters.js";
+import { AircraftCandidatesPanel } from "../active/AircraftCandidatesPanel.js";
+import type { AircraftSelection } from "../active/types.js";
 
 const URGENCY_TONE: Record<string, string> = {
   critical: "border-urgency-critical/70 text-urgency-critical bg-urgency-critical/[0.08]",
@@ -76,9 +79,39 @@ export function JobDrawer({
     { id: jobId ?? -1 },
     { enabled: jobId != null },
   );
+  const activeJob = trpc.lifecycle.getActiveJob.useQuery();
+  const utils = trpc.useUtils();
+  const acceptMutation = trpc.lifecycle.accept.useMutation({
+    onSuccess: (result) => {
+      if (result.ok) {
+        utils.jobs.list.invalidate();
+        utils.lifecycle.getActiveJob.invalidate();
+        utils.career.get.invalidate();
+        onClose();
+      }
+    },
+  });
+
+  const [selection, setSelection] = useState<AircraftSelection | null>(null);
+
+  // Reset selection whenever the drawer points to a different job.
+  // `acceptMutation.reset` is referentially stable from useMutation, so
+  // including it in deps doesn't trigger re-runs but satisfies exhaustive-deps.
+  const resetMutation = acceptMutation.reset;
+  useEffect(() => {
+    setSelection(null);
+    resetMutation();
+  }, [jobId, resetMutation]);
 
   const open = jobId != null;
   const job = detail.data;
+  const hasActiveJob = activeJob.data != null;
+  const errorMsg =
+    acceptMutation.data && !acceptMutation.data.ok
+      ? acceptMutation.data.error
+      : acceptMutation.error
+        ? acceptMutation.error.message
+        : null;
 
   return (
     <aside
@@ -284,6 +317,14 @@ export function JobDrawer({
                 </Field>
               </div>
             </div>
+
+            {/* Aircraft selection */}
+            <AircraftCandidatesPanel
+              jobId={job.id}
+              selection={selection}
+              onSelectionChange={setSelection}
+              hasActiveJob={hasActiveJob}
+            />
           </>
         )}
       </div>
@@ -292,20 +333,45 @@ export function JobDrawer({
       <div className="border-t border-ink-600 bg-ink-800 px-6 py-4">
         <button
           type="button"
-          disabled={!job}
-          onClick={() => alert("Accept job — coming soon")}
+          disabled={
+            !job || !selection || hasActiveJob || acceptMutation.isPending
+          }
+          onClick={() => {
+            if (!job || !selection) return;
+            const payload =
+              selection.source === "owned"
+                ? {
+                    jobId: job.id,
+                    aircraftSource: "owned" as const,
+                    ownedAircraftId: selection.ownedAircraftId,
+                  }
+                : {
+                    jobId: job.id,
+                    aircraftSource: "rental" as const,
+                    rentalAircraftTypeId: selection.rentalAircraftTypeId,
+                  };
+            acceptMutation.mutate(payload);
+          }}
           className="group relative w-full overflow-hidden rounded-sm border border-amber-deep bg-amber-glow/[0.08] py-3 font-mono text-[12px] uppercase tracking-callsign text-amber-glow transition-colors hover:bg-amber-glow/[0.16] hover:text-amber-warm disabled:opacity-40"
         >
           <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-amber-deep">
             ▸
           </span>
-          Accept job
+          {acceptMutation.isPending ? "Accepting…" : "Accept job"}
           <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-amber-deep">
             ▸
           </span>
         </button>
         <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
-          Acceptance flow not yet implemented
+          {errorMsg ? (
+            <span className="text-urgency-critical">{errorMsg}</span>
+          ) : hasActiveJob ? (
+            "Active job in progress — open it from the header"
+          ) : !selection ? (
+            "Select an eligible aircraft to continue"
+          ) : (
+            "Commits the job · aircraft locked to this flight"
+          )}
         </div>
       </div>
     </aside>

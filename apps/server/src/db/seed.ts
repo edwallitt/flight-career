@@ -1,10 +1,51 @@
 import { eq } from "drizzle-orm";
 import { db } from "./client.js";
-import { aircraftTypes, airports, career, ratings } from "./schema.js";
+import {
+  aircraftTypes,
+  airports,
+  career,
+  ratings,
+  rentalFleet,
+  reputation,
+} from "./schema.js";
 import { aircraftSeed } from "./seed-data/aircraft.js";
 import { airportSeed } from "./seed-data/airports.js";
 
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
+const ROLE_SCOPES = ["bush", "air_taxi", "light_jet"] as const;
+
+// A meaningful starting baseline for role reputation. With a 0–100 cap, a
+// score of 0 makes early cancel penalties no-ops because the floor pins
+// them. 25 leaves headroom for the first few cancellation hits to actually
+// register, while staying below the typical premium-template gates.
+const STARTING_ROLE_REPUTATION = 25;
+
+// Rental availability rules. Order matters only for readability — types are
+// deduplicated below before insertion.
+const BASE_RENTAL_TYPES = ["c172", "bonanza_g36", "da40"] as const;
+const MEP_RENTAL_TYPES = ["baron_g58", "da42"] as const;
+const HEAVY_SET_RENTAL_TYPES = ["caravan", "kodiak", "tbm930"] as const;
+const MAJOR_ONLY_RENTAL_TYPES = [
+  "pc12",
+  "cj4",
+  "phenom300",
+  "vision_jet",
+] as const;
+
+function rentalTypesFor(size: string, longestRunwayFt: number): string[] {
+  if (size !== "major" && size !== "regional") return [];
+  const types = new Set<string>(BASE_RENTAL_TYPES);
+  if (longestRunwayFt >= 5000) {
+    for (const id of MEP_RENTAL_TYPES) types.add(id);
+  }
+  if (longestRunwayFt >= 6000) {
+    for (const id of HEAVY_SET_RENTAL_TYPES) types.add(id);
+  }
+  if (size === "major") {
+    for (const id of MAJOR_ONLY_RENTAL_TYPES) types.add(id);
+  }
+  return [...types];
+}
 
 async function seed() {
   // Catalogs: idempotent — re-running is a no-op.
@@ -25,6 +66,15 @@ async function seed() {
   }));
   db.insert(ratings).values(ratingRows).onConflictDoNothing().run();
 
+  // Role reputation rows at a baseline score. Idempotent — re-running won't
+  // overwrite a player's earned score.
+  const reputationRows = ROLE_SCOPES.map((scope) => ({
+    scope,
+    score: STARTING_ROLE_REPUTATION,
+    updatedAt: now,
+  }));
+  db.insert(reputation).values(reputationRows).onConflictDoNothing().run();
+
   // Career singleton — only seed if id=1 doesn't exist.
   const existing = db.select().from(career).where(eq(career.id, 1)).get();
   if (!existing) {
@@ -41,11 +91,25 @@ async function seed() {
       .run();
   }
 
+  // Rental fleets at every major/regional airport. Idempotent via the unique
+  // (airport_icao, aircraft_type_id) index + onConflictDoNothing.
+  const rentalRows: { airportIcao: string; aircraftTypeId: string }[] = [];
+  for (const ap of airportSeed) {
+    for (const typeId of rentalTypesFor(ap.size, ap.longestRunwayFt)) {
+      rentalRows.push({ airportIcao: ap.icao, aircraftTypeId: typeId });
+    }
+  }
+  if (rentalRows.length > 0) {
+    db.insert(rentalFleet).values(rentalRows).onConflictDoNothing().run();
+  }
+
   const counts = {
     aircraftTypes: db.select().from(aircraftTypes).all().length,
     airports: db.select().from(airports).all().length,
     ratings: db.select().from(ratings).all().length,
+    reputation: db.select().from(reputation).all().length,
     career: db.select().from(career).all().length,
+    rentalFleet: db.select().from(rentalFleet).all().length,
   };
   console.log("Seed complete:", counts);
 }

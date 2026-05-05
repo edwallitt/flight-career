@@ -1,15 +1,22 @@
+import { useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { ComingSoon } from "./components/ComingSoon.js";
 import { Header } from "./components/Header.js";
 import { Sidebar } from "./components/Sidebar.js";
+import { BriefingScreen } from "./sections/active/BriefingScreen.js";
+import { CurrentJobModal } from "./sections/active/CurrentJobModal.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
 
+type ActiveOverlay = "current" | "brief" | null;
+
 export default function App() {
+  const [overlay, setOverlay] = useState<ActiveOverlay>(null);
+
   return (
     <div className="flex h-full bg-ink-850 text-text">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header />
+        <Header onOpenActiveJob={() => setOverlay("current")} />
         <main className="relative min-h-0 flex-1 overflow-hidden">
           <Routes>
             <Route path="/" element={<Navigate to="/jobs" replace />} />
@@ -33,6 +40,16 @@ export default function App() {
           </Routes>
         </main>
       </div>
+
+      {overlay === "current" && (
+        <CurrentJobModal
+          onClose={() => setOverlay(null)}
+          onBeginBriefing={() => setOverlay("brief")}
+        />
+      )}
+      {overlay === "brief" && (
+        <BriefingScreen onClose={() => setOverlay("current")} />
+      )}
     </div>
   );
 }

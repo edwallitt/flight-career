@@ -121,6 +121,10 @@ The Force Tick button is a dev affordance — it triggers the server's
 `tickJobGeneration` immediately and shows `+N new · M aged out` feedback. Plan
 to hide it behind a dev flag once the player progression loop lands.
 
+## Testing
+
+In order to test you can connect to Chrome directly and use the browser to test. This is using the Claude plugin for chrome.
+
 ## What's intentionally stubbed
 
 - Job acceptance flow — drawer button is `alert(…)`. Server side has no
