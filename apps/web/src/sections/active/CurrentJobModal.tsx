@@ -81,6 +81,14 @@ export function CurrentJobModal({
       }
     },
   });
+  const beginFlightMutation = trpc.lifecycle.beginFlight.useMutation({
+    onSuccess: (result) => {
+      if (result.ok) {
+        utils.lifecycle.getActiveJob.invalidate();
+        onClose();
+      }
+    },
+  });
   const [confirmCancel, setConfirmCancel] = useState(false);
 
   useBodyScrollLock();
@@ -328,14 +336,20 @@ export function CurrentJobModal({
 
         {/* Footer actions */}
         <div className="flex items-center justify-between gap-3 border-t border-ink-600 bg-ink-800 px-7 py-4">
-          <button
-            type="button"
-            disabled={cancelMutation.isPending}
-            onClick={() => setConfirmCancel(true)}
-            className="rounded-sm border border-ink-600 bg-ink-750 px-4 py-2 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-urgency-critical/60 hover:text-urgency-critical"
-          >
-            Cancel job…
-          </button>
+          {data.state === "in_progress" ? (
+            <span className="font-mono text-[11px] uppercase tracking-callsign text-muted-dim">
+              Use the flight panel to abort
+            </span>
+          ) : (
+            <button
+              type="button"
+              disabled={cancelMutation.isPending}
+              onClick={() => setConfirmCancel(true)}
+              className="rounded-sm border border-ink-600 bg-ink-750 px-4 py-2 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-urgency-critical/60 hover:text-urgency-critical"
+            >
+              Cancel job…
+            </button>
+          )}
           <div className="flex items-center gap-2">
             {data.state === "accepted" && (
               <button
@@ -349,10 +363,20 @@ export function CurrentJobModal({
             {data.state === "briefed" && (
               <button
                 type="button"
-                onClick={() => alert("Begin Flight — coming next")}
-                className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm hover:bg-amber-glow/[0.24]"
+                disabled={beginFlightMutation.isPending}
+                onClick={() => beginFlightMutation.mutate()}
+                className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24] disabled:opacity-40"
               >
-                Begin flight ▸
+                {beginFlightMutation.isPending ? "Starting…" : "Begin flight ▸"}
+              </button>
+            )}
+            {data.state === "in_progress" && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-sm border border-amber-glow bg-amber-glow/[0.10] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm hover:bg-amber-glow/[0.18]"
+              >
+                Open flight panel ▸
               </button>
             )}
           </div>

@@ -1,0 +1,1 @@
+ALTER TABLE `flights` ADD `outcome` text DEFAULT 'completed' NOT NULL;

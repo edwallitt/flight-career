@@ -5,6 +5,7 @@ import { Header } from "./components/Header.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { BriefingScreen } from "./sections/active/BriefingScreen.js";
 import { CurrentJobModal } from "./sections/active/CurrentJobModal.js";
+import { InFlightSurface } from "./sections/flight/InFlightSurface.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
 
 type ActiveOverlay = "current" | "brief" | null;
@@ -50,6 +51,8 @@ export default function App() {
       {overlay === "brief" && (
         <BriefingScreen onClose={() => setOverlay("current")} />
       )}
+
+      <InFlightSurface />
     </div>
   );
 }

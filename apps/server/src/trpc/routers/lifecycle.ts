@@ -1,8 +1,11 @@
 import { z } from "zod";
 import {
+  abortFlight,
   acceptJob,
+  beginFlight,
   briefJob,
   cancelAcceptedJob,
+  completeFlightAction,
   getActiveJob,
 } from "../../services/jobLifecycle.js";
 import { publicProcedure, router } from "../trpc.js";
@@ -34,4 +37,18 @@ export const lifecycleRouter = router({
   brief: publicProcedure
     .input(z.object({ fuelGallons: z.number().positive() }))
     .mutation(({ input }) => briefJob(input)),
+
+  beginFlight: publicProcedure.mutation(() => beginFlight()),
+
+  complete: publicProcedure
+    .input(
+      z.object({
+        actualDestinationIcao: z.string().min(3).max(8),
+        blockTimeMinutes: z.number().positive(),
+        fuelBurnedGal: z.number().nonnegative().optional(),
+      }),
+    )
+    .mutation(({ input }) => completeFlightAction(input)),
+
+  abort: publicProcedure.mutation(() => abortFlight()),
 });

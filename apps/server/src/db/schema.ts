@@ -85,6 +85,7 @@ export const career = sqliteTable("career", {
   }),
   briefedFuelGallons: real("briefed_fuel_gallons"),
   briefedFuelCostCents: integer("briefed_fuel_cost_cents"),
+  flightStartedAt: integer("flight_started_at"),
 });
 
 export const ratings = sqliteTable("ratings", {
@@ -243,6 +244,11 @@ export const flights = sqliteTable("flights", {
   fuelBurnedGal: real("fuel_burned_gal").notNull(),
   totalCost: integer("total_cost").notNull(),
   totalRevenue: integer("total_revenue").notNull(),
+  outcome: text("outcome", {
+    enum: ["completed", "diverted", "failed"],
+  })
+    .notNull()
+    .default("completed"),
   notes: text("notes"),
 });
 

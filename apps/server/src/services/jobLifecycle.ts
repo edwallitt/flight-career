@@ -1,7 +1,10 @@
 import {
   checkEligibility,
+  completeFlight,
   haversineNm,
   type AircraftCandidate,
+  type CompleteFlightInput,
+  type CompleteFlightOutput,
   type EligibilityAirport,
   type JobRequirements,
   type PlayerState,
@@ -12,6 +15,7 @@ import {
   aircraftTypes,
   airports,
   career,
+  flights,
   jobs,
   ownedAircraft,
   ratings,
@@ -654,13 +658,13 @@ export function getActiveJob(): ActiveJobSnapshot | null {
     typeRow.fuelBurnGph,
   );
 
-  // The cancel penalty depends on the current lifecycle state. in_progress
-  // is a placeholder for the next prompt; reuse "briefed" magnitudes for now.
-  const penaltyKey =
+  // Cancel penalty surfaced to the UI depends on lifecycle state. accepted/
+  // briefed use the cancel magnitudes; in_progress uses the abort magnitudes
+  // (a different code path, but the player sees one "back out" cost).
+  const penalty =
     careerRow.activeFlightState === "in_progress"
-      ? "briefed"
-      : careerRow.activeFlightState;
-  const penalty = REP_HIT_BY_STATE[penaltyKey];
+      ? ABORT_REP_PENALTY
+      : REP_HIT_BY_STATE[careerRow.activeFlightState];
 
   return {
     state: careerRow.activeFlightState,
@@ -710,4 +714,405 @@ export function getActiveJob(): ActiveJobSnapshot | null {
     recommendedFuelGallons: recommended,
     cancelPenalty: { role: penalty.role, client: penalty.client },
   };
+}
+
+// ---------------------------------------------------------------------------
+// beginFlight — briefed → in_progress
+// ---------------------------------------------------------------------------
+
+export type BeginFlightResult =
+  | { ok: true; startedAt: number }
+  | { ok: false; error: string };
+
+export function beginFlight(): BeginFlightResult {
+  return db.transaction((tx): BeginFlightResult => {
+    const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
+    if (!careerRow) return { ok: false, error: "Career not found" };
+    if (careerRow.activeFlightState !== "briefed") {
+      return {
+        ok: false,
+        error: `Cannot begin flight in state ${careerRow.activeFlightState ?? "(none)"}`,
+      };
+    }
+
+    const startedAt = careerRow.simDateTime;
+    tx.update(career)
+      .set({ activeFlightState: "in_progress", flightStartedAt: startedAt })
+      .where(eq(career.id, 1))
+      .run();
+
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      tx.update(ownedAircraft)
+        .set({ status: "in_flight" })
+        .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+        .run();
+    }
+
+    if (careerRow.activeJobId != null) {
+      tx.update(jobs)
+        .set({ status: "in_progress" })
+        .where(eq(jobs.id, careerRow.activeJobId))
+        .run();
+    }
+
+    return { ok: true, startedAt };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// completeFlightAction — in_progress → completed
+// ---------------------------------------------------------------------------
+
+const HUNDRED_HR_INSPECTION_THRESHOLD = 100;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+export interface CompleteFlightActionInput {
+  actualDestinationIcao: string;
+  blockTimeMinutes: number;
+  fuelBurnedGal?: number;
+}
+
+export interface CompletionSummaryPayload extends CompleteFlightOutput {
+  inspectionAlerts: string[];
+  cashAppliedNow: number;
+}
+
+export type CompleteFlightActionResult =
+  | { ok: true; summary: CompletionSummaryPayload }
+  | { ok: false; error: string };
+
+function flightOutcome(
+  summary: CompleteFlightOutput,
+): "completed" | "diverted" | "failed" {
+  if (summary.finalPay === 0) return "failed";
+  if (summary.diversionAdjustment < 0) return "diverted";
+  return "completed";
+}
+
+export function completeFlightAction(
+  input: CompleteFlightActionInput,
+): CompleteFlightActionResult {
+  if (!Number.isFinite(input.blockTimeMinutes) || input.blockTimeMinutes <= 0) {
+    return { ok: false, error: "Block time must be positive" };
+  }
+  if (!input.actualDestinationIcao || input.actualDestinationIcao.length < 3) {
+    return { ok: false, error: "Destination ICAO is required" };
+  }
+
+  return db.transaction((tx): CompleteFlightActionResult => {
+    const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
+    if (!careerRow) return { ok: false, error: "Career not found" };
+    if (careerRow.activeFlightState !== "in_progress") {
+      return {
+        ok: false,
+        error: `Cannot complete in state ${careerRow.activeFlightState ?? "(none)"}`,
+      };
+    }
+    if (careerRow.activeJobId == null) {
+      return { ok: false, error: "No active job id" };
+    }
+
+    const jobRow = tx
+      .select()
+      .from(jobs)
+      .where(eq(jobs.id, careerRow.activeJobId))
+      .get();
+    if (!jobRow) return { ok: false, error: "Active job not found" };
+
+    const aircraftTypeId = activeAircraftType(careerRow);
+    if (!aircraftTypeId) {
+      return { ok: false, error: "Active aircraft type not resolved" };
+    }
+    const typeRow = tx
+      .select()
+      .from(aircraftTypes)
+      .where(eq(aircraftTypes.id, aircraftTypeId))
+      .get();
+    if (!typeRow) return { ok: false, error: "Aircraft type not found" };
+
+    const actualDest = input.actualDestinationIcao.trim().toUpperCase();
+    const destRow = tx
+      .select()
+      .from(airports)
+      .where(eq(airports.icao, actualDest))
+      .get();
+    if (!destRow) {
+      return { ok: false, error: `Unknown destination ICAO: ${actualDest}` };
+    }
+    const jobDestRow = tx
+      .select()
+      .from(airports)
+      .where(eq(airports.icao, jobRow.destinationIcao))
+      .get();
+    const jobOriginRow = tx
+      .select()
+      .from(airports)
+      .where(eq(airports.icao, jobRow.originIcao))
+      .get();
+    if (!jobDestRow || !jobOriginRow) {
+      return { ok: false, error: "Job airport endpoints not found" };
+    }
+
+    const isDiversion = actualDest !== jobRow.destinationIcao;
+    const divertedDistanceFromTargetNm = isDiversion
+      ? haversineNm(
+          { lat: destRow.lat, lon: destRow.lon },
+          { lat: jobDestRow.lat, lon: jobDestRow.lon },
+        )
+      : 0;
+
+    let ownedAircraftRow: typeof ownedAircraft.$inferSelect | null = null;
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      ownedAircraftRow =
+        tx
+          .select()
+          .from(ownedAircraft)
+          .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+          .get() ?? null;
+    }
+
+    // Owned aircraft refuel at destination if the airport sells the right fuel.
+    // For now we always refuel owned aircraft so they can fly home; rentals
+    // never get refueled here (the rental house handles that).
+    const refuelAtDestination =
+      careerRow.activeAircraftSource === "owned" &&
+      (typeRow.fuelType === "jet-a" ? destRow.hasJetA : destRow.hasAvgas);
+    const destFuelPrice = refuelAtDestination
+      ? fuelPriceCentsPerGal(typeRow.fuelType, destRow.baseFuelMultiplier)
+      : 0;
+
+    const completionInput: CompleteFlightInput = {
+      jobId: jobRow.id,
+      clientId: jobRow.clientId,
+      role: jobRow.role,
+      jobOriginIcao: jobRow.originIcao,
+      jobDestinationIcao: jobRow.destinationIcao,
+      jobPay: jobRow.pay,
+      jobLatestDeparture: jobRow.latestDeparture,
+      jobUrgency: jobRow.urgency,
+      weatherSensitivity: jobRow.weatherSensitivity,
+
+      aircraftSource: careerRow.activeAircraftSource ?? "rental",
+      aircraftTypeId: typeRow.id,
+      aircraftClass: typeRow.class,
+      ownedAircraftId: ownedAircraftRow?.id ?? null,
+      rentalRatePerHourCents:
+        careerRow.activeAircraftSource === "rental"
+          ? typeRow.rentalRatePerHour
+          : 0,
+      fuelBurnGph: typeRow.fuelBurnGph,
+      cruiseSpeedKts: typeRow.cruiseSpeedKts,
+
+      actualOriginIcao: jobRow.originIcao,
+      actualDestinationIcao: actualDest,
+      startedAt: careerRow.flightStartedAt ?? careerRow.simDateTime,
+      endedAt: careerRow.simDateTime,
+      blockTimeMinutes: input.blockTimeMinutes,
+      fuelBurnedGal:
+        input.fuelBurnedGal != null && Number.isFinite(input.fuelBurnedGal)
+          ? input.fuelBurnedGal
+          : null,
+      briefedFuelCostCents: careerRow.briefedFuelCostCents ?? 0,
+      refuelAtDestination,
+      destinationFuelPriceCents: destFuelPrice,
+
+      destinationLandingFeeCents: destRow.baseLandingFee,
+      isDiversion,
+      divertedDistanceFromTargetNm,
+    };
+
+    const summary = completeFlight(completionInput);
+
+    // Apply outputs ----------------------------------------------------------
+    const simNow = careerRow.simDateTime;
+
+    // Career: cash, location, clear active state
+    tx.update(career)
+      .set({
+        cash: careerRow.cash + summary.netCashDelta,
+        currentLocationIcao: actualDest,
+        activeJobId: null,
+        activeAircraftSource: null,
+        activeAircraftOwnedId: null,
+        activeAircraftRentalTypeId: null,
+        activeFlightState: null,
+        flightStartedAt: null,
+        briefedFuelGallons: null,
+        briefedFuelCostCents: null,
+      })
+      .where(eq(career.id, 1))
+      .run();
+
+    // Reputation deltas (clamped 0–100, upsert)
+    for (const delta of summary.reputationDeltas) {
+      adjustReputation(delta.scope, delta.delta, simNow);
+    }
+
+    // Owned aircraft updates
+    const inspectionLines: string[] = [];
+    if (ownedAircraftRow && summary.aircraftUpdates) {
+      const upd = summary.aircraftUpdates;
+      const newAirframe = ownedAircraftRow.airframeHours + upd.blockHoursAdded;
+      const newEngineSinceOH =
+        ownedAircraftRow.engineHoursSinceOverhaul + upd.blockHoursAdded;
+      const newSince100 = ownedAircraftRow.hoursSince100hr + upd.blockHoursAdded;
+      const newSinceAnnual =
+        ownedAircraftRow.hoursSinceAnnual + upd.blockHoursAdded;
+      const newFuel = Math.max(
+        0,
+        ownedAircraftRow.fuelOnBoardGal -
+          upd.fuelBurnedGalDelta +
+          upd.fuelRefilledGalDelta,
+      );
+
+      tx.update(ownedAircraft)
+        .set({
+          airframeHours: newAirframe,
+          engineHoursSinceOverhaul: newEngineSinceOH,
+          hoursSince100hr: newSince100,
+          hoursSinceAnnual: newSinceAnnual,
+          fuelOnBoardGal: newFuel,
+          currentLocationIcao: actualDest,
+          status: "available",
+        })
+        .where(eq(ownedAircraft.id, ownedAircraftRow.id))
+        .run();
+
+      // Inspection alerts (informational — auto-scheduling is a future feature)
+      if (newSince100 >= HUNDRED_HR_INSPECTION_THRESHOLD) {
+        inspectionLines.push(
+          `100-hour inspection due (${newSince100.toFixed(1)} hrs since last)`,
+        );
+      }
+      if (simNow >= ownedAircraftRow.annualDueAt) {
+        const daysOver = Math.floor(
+          (simNow - ownedAircraftRow.annualDueAt) / MS_PER_DAY,
+        );
+        inspectionLines.push(
+          daysOver > 0
+            ? `Annual inspection overdue by ${daysOver} day${daysOver === 1 ? "" : "s"}`
+            : "Annual inspection due now",
+        );
+      }
+    }
+
+    // Flight log entry. endedAt is derived from startedAt + block time so the
+    // pair stays internally consistent — sim time advances in 30-min ticks
+    // which would otherwise create gaps between (endedAt - startedAt) and the
+    // user-entered block time.
+    const flightStartedAt = completionInput.startedAt;
+    const flightEndedAt =
+      flightStartedAt + summary.flightLogEntry.blockTimeMinutes * 60_000;
+    const outcome = flightOutcome(summary);
+    tx.insert(flights)
+      .values({
+        jobId: jobRow.id,
+        ownedAircraftId: ownedAircraftRow?.id ?? null,
+        rentalAircraftTypeId:
+          careerRow.activeAircraftSource === "rental" ? typeRow.id : null,
+        originIcao: summary.flightLogEntry.originIcao,
+        destinationIcao: summary.flightLogEntry.destinationIcao,
+        startedAt: flightStartedAt,
+        endedAt: flightEndedAt,
+        blockTimeMinutes: summary.flightLogEntry.blockTimeMinutes,
+        fuelBurnedGal: summary.flightLogEntry.fuelBurnedGal,
+        totalCost: summary.flightLogEntry.totalCost,
+        totalRevenue: summary.flightLogEntry.totalRevenue,
+        outcome,
+        notes: summary.flightLogEntry.notes,
+      })
+      .run();
+
+    // Job: mark completed, store rep deltas
+    tx.update(jobs)
+      .set({
+        status: "completed",
+        completedAt: simNow,
+        reputationDeltasJson: JSON.stringify(summary.reputationDeltas),
+      })
+      .where(eq(jobs.id, jobRow.id))
+      .run();
+
+    const finalSummary: CompletionSummaryPayload = {
+      ...summary,
+      inspectionAlerts: inspectionLines,
+      cashAppliedNow: summary.netCashDelta,
+    };
+
+    return { ok: true, summary: finalSummary };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// abortFlight — in_progress → cancelled (rep penalty, no pay)
+// ---------------------------------------------------------------------------
+
+const ABORT_REP_PENALTY = { role: -8, client: -12 } as const;
+
+export function abortFlight(): LifecycleResult {
+  return db.transaction((tx): LifecycleResult => {
+    const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
+    if (!careerRow) return { ok: false, error: "Career not found" };
+    if (careerRow.activeFlightState !== "in_progress") {
+      return { ok: false, error: "No flight in progress" };
+    }
+    if (careerRow.activeJobId == null) {
+      return { ok: false, error: "No active job id" };
+    }
+
+    const jobRow = tx
+      .select()
+      .from(jobs)
+      .where(eq(jobs.id, careerRow.activeJobId))
+      .get();
+    if (!jobRow) return { ok: false, error: "Active job not found" };
+
+    if (jobRow.role !== "open") {
+      adjustReputation(jobRow.role, ABORT_REP_PENALTY.role, careerRow.simDateTime);
+      if (jobRow.clientId) {
+        adjustReputation(
+          `client:${jobRow.clientId}`,
+          ABORT_REP_PENALTY.client,
+          careerRow.simDateTime,
+        );
+      }
+    }
+
+    tx.update(jobs)
+      .set({ status: "cancelled" })
+      .where(eq(jobs.id, careerRow.activeJobId))
+      .run();
+
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      tx.update(ownedAircraft)
+        .set({ status: "available" })
+        .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+        .run();
+    }
+
+    tx.update(career)
+      .set({
+        activeJobId: null,
+        activeAircraftSource: null,
+        activeAircraftOwnedId: null,
+        activeAircraftRentalTypeId: null,
+        activeFlightState: null,
+        flightStartedAt: null,
+        briefedFuelGallons: null,
+        briefedFuelCostCents: null,
+      })
+      .where(eq(career.id, 1))
+      .run();
+
+    return { ok: true };
+  });
 }

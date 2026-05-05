@@ -1,0 +1,1 @@
+ALTER TABLE `career` ADD `flight_started_at` integer;

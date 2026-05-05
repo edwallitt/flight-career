@@ -1,4 +1,5 @@
 import { aircraftRouter } from "./routers/aircraft.js";
+import { airportsRouter } from "./routers/airports.js";
 import { careerRouter } from "./routers/career.js";
 import { healthRouter } from "./routers/health.js";
 import { jobsRouter } from "./routers/jobs.js";
@@ -10,6 +11,7 @@ export const appRouter = router({
   career: careerRouter,
   jobs: jobsRouter,
   aircraft: aircraftRouter,
+  airports: airportsRouter,
   lifecycle: lifecycleRouter,
 });
 

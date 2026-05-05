@@ -29,6 +29,20 @@
       "when": 1777985168580,
       "tag": "0003_lame_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777990761214,
+      "tag": "0004_solid_rumiko_fujikawa",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1777991835323,
+      "tag": "0005_aspiring_ink",
+      "breakpoints": true
     }
   ]
 }

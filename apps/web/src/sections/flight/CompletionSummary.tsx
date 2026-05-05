@@ -1,0 +1,479 @@
+import type { CompleteFlightOutput } from "@flightcareer/shared";
+import { useEffect, useRef, useState } from "react";
+import { formatCash } from "../../lib/formatters.js";
+
+export interface CompletionSummaryData extends CompleteFlightOutput {
+  inspectionAlerts: string[];
+  cashAppliedNow: number;
+}
+
+const ROLE_LABEL: Record<string, string> = {
+  bush: "Bush",
+  air_taxi: "Air Taxi",
+  light_jet: "Light Jet",
+};
+
+function useEscape(onClose: () => void): void {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+}
+
+// Lightweight count-up: animates from 0 to `target` over `durationMs`.
+function useCountUp(target: number, durationMs = 700): number {
+  const [value, setValue] = useState(0);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const start = performance.now();
+    const sign = target >= 0 ? 1 : -1;
+    const abs = Math.abs(target);
+
+    const tick = (t: number) => {
+      const k = Math.min(1, (t - start) / durationMs);
+      // Ease-out cubic
+      const eased = 1 - Math.pow(1 - k, 3);
+      setValue(Math.round(abs * eased) * sign);
+      if (k < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [target, durationMs]);
+
+  return value;
+}
+
+function CornerTicks({ tone = "amber" }: { tone?: "amber" | "critical" }) {
+  const cls =
+    tone === "critical"
+      ? "border-urgency-critical/70"
+      : "border-amber-deep/70";
+  return (
+    <>
+      <span className={`pointer-events-none absolute left-3 top-3 block h-2 w-2 border-l border-t ${cls}`} />
+      <span className={`pointer-events-none absolute right-3 top-3 block h-2 w-2 border-r border-t ${cls}`} />
+      <span className={`pointer-events-none absolute left-3 bottom-3 block h-2 w-2 border-l border-b ${cls}`} />
+      <span className={`pointer-events-none absolute right-3 bottom-3 block h-2 w-2 border-r border-b ${cls}`} />
+    </>
+  );
+}
+
+function repLabel(scope: string): string {
+  if (scope.startsWith("client:")) {
+    const id = scope.slice("client:".length);
+    return id
+      .split("_")
+      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+      .join(" ");
+  }
+  return ROLE_LABEL[scope] ?? scope;
+}
+
+function ReputationRow({
+  scope,
+  delta,
+}: {
+  scope: string;
+  delta: number;
+}) {
+  // Map -15..+15 onto a 0..100% bar centered at 50%.
+  const max = 15;
+  const clamped = Math.max(-max, Math.min(max, delta));
+  const widthPct = (Math.abs(clamped) / max) * 50;
+  const positive = delta >= 0;
+  const color = positive ? "bg-amber-glow" : "bg-urgency-critical";
+
+  return (
+    <div className="flex items-center gap-3 py-1.5">
+      <div className="flex-1 font-mono text-tiny text-text">
+        {repLabel(scope)}
+      </div>
+      <div className="relative h-1.5 w-40 rounded-full bg-ink-700">
+        <span className="absolute left-1/2 top-0 h-full w-px bg-ink-500" />
+        <span
+          className={`absolute top-0 h-full ${color}`}
+          style={{
+            left: positive ? "50%" : `${50 - widthPct}%`,
+            width: `${widthPct}%`,
+            transition: "all 600ms ease-out",
+          }}
+        />
+      </div>
+      <div
+        className={`w-10 text-right font-mono text-tiny tabular-nums ${
+          positive ? "text-amber-glow" : "text-urgency-critical"
+        }`}
+      >
+        {positive ? "+" : ""}
+        {delta}
+      </div>
+    </div>
+  );
+}
+
+function CashLine({
+  label,
+  cents,
+  sign,
+  emphasis,
+}: {
+  label: string;
+  cents: number;
+  sign: "+" | "-" | "";
+  emphasis?: "net" | "negative" | "default";
+}) {
+  const animated = useCountUp(cents);
+  const display = formatCash(Math.abs(animated));
+  const colorCls =
+    emphasis === "net"
+      ? animated >= 0
+        ? "text-amber-glow"
+        : "text-urgency-critical"
+      : emphasis === "negative"
+        ? "text-urgency-urgent"
+        : "text-text-high";
+  const sizeCls = emphasis === "net" ? "text-[24px]" : "text-[15px]";
+
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span
+        className={`font-mono ${
+          emphasis === "net"
+            ? "text-tiny uppercase tracking-callsign text-amber-deep"
+            : "label"
+        }`}
+      >
+        {label}
+      </span>
+      <span className={`font-mono tabular-nums ${sizeCls} ${colorCls}`}>
+        {sign}
+        {display}
+      </span>
+    </div>
+  );
+}
+
+type Banner = "success" | "diversion" | "failed";
+
+function statusBanner(summary: CompletionSummaryData): Banner {
+  if (summary.finalPay === 0) return "failed";
+  if (summary.diversionAdjustment < 0) return "diversion";
+  return "success";
+}
+
+const BANNER_CONFIG: Record<
+  Banner,
+  { label: string; barColor: string; tone: string }
+> = {
+  success: {
+    label: "Job complete",
+    barColor: "bg-amber-glow",
+    tone: "text-amber-glow",
+  },
+  diversion: {
+    label: "Diverted",
+    barColor: "bg-urgency-urgent",
+    tone: "text-urgency-urgent",
+  },
+  failed: {
+    label: "Failed delivery",
+    barColor: "bg-urgency-critical",
+    tone: "text-urgency-critical",
+  },
+};
+
+export function CompletionSummary({
+  summary,
+  onClose,
+}: {
+  summary: CompletionSummaryData;
+  onClose: () => void;
+}) {
+  useEscape(onClose);
+
+  const banner = statusBanner(summary);
+  const cfg = BANNER_CONFIG[banner];
+
+  // Round-trip profit on this job: revenue minus every cost (including the
+  // fuel that was paid pre-flight). cashAppliedNow is the smaller delta that
+  // hits the cash account at the moment of completion (fuel was already
+  // deducted at brief time, so it isn't subtracted again here).
+  const profit = summary.grossRevenue - summary.totalCosts;
+
+  // Pull origin/destination + block time from the canonical flight log entry.
+  const { originIcao, destinationIcao, blockTimeMinutes } = summary.flightLogEntry;
+  const blockH = Math.floor(blockTimeMinutes / 60);
+  const blockM = blockTimeMinutes % 60;
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-900/95 backdrop-blur-md"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Flight complete"
+    >
+      <div className="relative flex max-h-[92vh] w-[760px] max-w-[94vw] flex-col border border-ink-600 bg-ink-800 shadow-2xl">
+        <CornerTicks tone={banner === "failed" ? "critical" : "amber"} />
+
+        {/* Status bar */}
+        <div className={`h-1 w-full ${cfg.barColor}`} />
+
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-ink-600 px-8 py-6">
+          <div className="flex flex-col gap-1.5">
+            <div
+              className={`flex items-center gap-2 font-mono text-micro uppercase tracking-callsign ${cfg.tone}`}
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${cfg.barColor}`} />
+              {cfg.label}
+            </div>
+            <div className="font-display text-[26px] font-semibold tracking-tight text-text-high">
+              Flight logged
+            </div>
+            <div className="font-mono text-tiny text-muted-dim">
+              Block time {blockH}h {String(blockM).padStart(2, "0")}m ·{" "}
+              {summary.flightLogEntry.fuelBurnedGal.toFixed(1)} gal burned
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 items-center justify-center rounded-sm border border-ink-600 bg-ink-750 text-muted hover:border-amber-deep hover:text-amber-glow"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14">
+              <path
+                d="M3 3 L13 13 M13 3 L3 13"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-8 py-6">
+          {/* Route */}
+          <div className="rounded-sm border border-ink-600 bg-ink-750 p-5">
+            <div className="flex items-center justify-center gap-8">
+              <div className="flex flex-col items-end">
+                <span className="label">From</span>
+                <span className="icao text-[36px] font-medium leading-none text-text-high">
+                  {originIcao}
+                </span>
+              </div>
+              <div className="flex flex-1 flex-col items-center">
+                <svg
+                  width="100%"
+                  height="14"
+                  viewBox="0 0 240 14"
+                  preserveAspectRatio="none"
+                  className={cfg.tone}
+                  aria-hidden
+                >
+                  <line
+                    x1="2"
+                    y1="7"
+                    x2="238"
+                    y2="7"
+                    stroke="currentColor"
+                    strokeDasharray="3 4"
+                  />
+                  <circle cx="2" cy="7" r="3" fill="currentColor" />
+                  <circle cx="238" cy="7" r="3" fill="currentColor" />
+                </svg>
+                <span className="mt-1 font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+                  flown
+                </span>
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="label">To</span>
+                <span className="icao text-[36px] font-medium leading-none text-text-high">
+                  {destinationIcao}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-5">
+            {/* Financial breakdown */}
+            <div className="rounded-sm border border-ink-600 bg-ink-750 p-5">
+              <div className="flex items-center gap-2">
+                <span className="label">Receipt</span>
+                <span className="h-px flex-1 bg-ink-600" />
+              </div>
+              <div className="mt-2 divide-y divide-ink-700">
+                <CashLine
+                  label="Pay"
+                  cents={summary.grossRevenue}
+                  sign={summary.grossRevenue > 0 ? "+" : ""}
+                />
+                {summary.flightLogEntry.totalCost -
+                  summary.destinationLandingFee -
+                  summary.rentalCost -
+                  summary.destinationRefuelCost >
+                  0 && (
+                  <CashLine
+                    label="Fuel (pre-paid)"
+                    cents={
+                      summary.flightLogEntry.totalCost -
+                      summary.destinationLandingFee -
+                      summary.rentalCost -
+                      summary.destinationRefuelCost
+                    }
+                    sign="-"
+                    emphasis="negative"
+                  />
+                )}
+                {summary.destinationLandingFee > 0 && (
+                  <CashLine
+                    label="Landing fee"
+                    cents={summary.destinationLandingFee}
+                    sign="-"
+                    emphasis="negative"
+                  />
+                )}
+                {summary.rentalCost > 0 && (
+                  <CashLine
+                    label="Rental"
+                    cents={summary.rentalCost}
+                    sign="-"
+                    emphasis="negative"
+                  />
+                )}
+                {summary.destinationRefuelCost > 0 && (
+                  <CashLine
+                    label="Refuel at dest"
+                    cents={summary.destinationRefuelCost}
+                    sign="-"
+                    emphasis="negative"
+                  />
+                )}
+                <div className="pt-1.5">
+                  <CashLine
+                    label="Round-trip profit"
+                    cents={profit}
+                    sign={profit >= 0 ? "+" : "-"}
+                    emphasis="net"
+                  />
+                </div>
+                <div className="pt-1.5">
+                  <div className="flex items-center justify-between font-mono text-tiny">
+                    <span className="label text-muted-dim">Cash applied now</span>
+                    <span
+                      className={`tabular-nums ${
+                        summary.cashAppliedNow >= 0
+                          ? "text-text"
+                          : "text-urgency-critical"
+                      }`}
+                    >
+                      {summary.cashAppliedNow >= 0 ? "+" : "-"}
+                      {formatCash(Math.abs(summary.cashAppliedNow))}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-mono text-[10px] text-muted-faint">
+                    Pre-paid fuel was deducted at briefing; only the remainder
+                    moves the cash account at completion.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Reputation */}
+            <div className="rounded-sm border border-ink-600 bg-ink-750 p-5">
+              <div className="flex items-center gap-2">
+                <span className="label">Reputation</span>
+                <span className="h-px flex-1 bg-ink-600" />
+              </div>
+              {summary.reputationDeltas.length === 0 ? (
+                <div className="mt-3 font-mono text-tiny text-muted-dim">
+                  No reputation change
+                </div>
+              ) : (
+                <div className="mt-2 divide-y divide-ink-700">
+                  {summary.reputationDeltas.map((d) => (
+                    <ReputationRow
+                      key={d.scope}
+                      scope={d.scope}
+                      delta={d.delta}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Aircraft impact */}
+          {summary.aircraftUpdates && (
+            <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+              <div className="flex items-center gap-2">
+                <span className="label">Aircraft</span>
+                <span className="h-px flex-1 bg-ink-600" />
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-4 font-mono text-tiny text-text">
+                <div className="flex flex-col">
+                  <span className="label">Now at</span>
+                  <span className="icao mt-0.5 text-[15px] tracking-callsign text-text-high">
+                    {summary.aircraftUpdates.newLocationIcao}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="label">Hours added</span>
+                  <span className="mt-0.5 tabular-nums text-text-high">
+                    +{summary.aircraftUpdates.blockHoursAdded.toFixed(2)} hrs
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="label">Fuel</span>
+                  <span className="mt-0.5 tabular-nums text-text-high">
+                    −{summary.aircraftUpdates.fuelBurnedGalDelta.toFixed(1)} gal
+                    {summary.aircraftUpdates.fuelRefilledGalDelta > 0 && (
+                      <span className="ml-1 text-amber-glow">
+                        / +{summary.aircraftUpdates.fuelRefilledGalDelta.toFixed(1)}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Inspection alerts */}
+          {summary.inspectionAlerts.length > 0 && (
+            <div className="rounded-sm border border-urgency-urgent/60 bg-urgency-urgent/[0.06] p-4">
+              <div className="flex items-center gap-2">
+                <span className="label text-urgency-urgent">Maintenance alert</span>
+                <span className="h-px flex-1 bg-urgency-urgent/30" />
+              </div>
+              <ul className="mt-2 list-disc space-y-1 pl-5 font-mono text-tiny text-text">
+                {summary.inspectionAlerts.map((line, i) => (
+                  <li key={i}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 border-t border-ink-600 bg-ink-850 px-8 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-6 py-2.5 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24]"
+          >
+            Continue ▸
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
