@@ -1,0 +1,28 @@
+node_modules
+dist
+.vite
+.turbo
+.DS_Store
+
+# Build output
+**/dist/
+**/build/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# SQLite database
+data/*.sqlite
+data/*.sqlite-journal
+data/*.sqlite-wal
+data/*.sqlite-shm
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Editor
+.idea
+.vscode
+*.log

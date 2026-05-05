@@ -1,0 +1,1 @@
+ALTER TABLE `jobs` ADD `description` text DEFAULT '' NOT NULL;
