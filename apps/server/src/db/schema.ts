@@ -267,6 +267,28 @@ export const maintenanceEvents = sqliteTable("maintenance_events", {
   description: text("description").notNull(),
 });
 
+export const transfers = sqliteTable("transfers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type", {
+    enum: ["pilot", "pilot_aircraft", "aircraft"],
+  }).notNull(),
+  originIcao: text("origin_icao")
+    .notNull()
+    .references(() => airports.icao),
+  destinationIcao: text("destination_icao")
+    .notNull()
+    .references(() => airports.icao),
+  ownedAircraftId: integer("owned_aircraft_id").references(
+    (): AnySQLiteColumn => ownedAircraft.id,
+  ),
+  distanceNm: real("distance_nm").notNull(),
+  costCents: integer("cost_cents").notNull(),
+  simTimeAdvancedMinutes: integer("sim_time_advanced_minutes").notNull(),
+  aircraftHoursAccrued: real("aircraft_hours_accrued").notNull(),
+  fuelGallonsBurned: real("fuel_gallons_burned").notNull(),
+  executedAt: integer("executed_at").notNull(),
+});
+
 export const fuelPriceSnapshots = sqliteTable(
   "fuel_price_snapshots",
   {

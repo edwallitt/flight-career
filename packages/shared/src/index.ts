@@ -11,3 +11,4 @@ export * from "./clients/index.js";
 export * from "./jobs/index.js";
 export * from "./aircraft/index.js";
 export * from "./lifecycle/index.js";
+export * from "./travel/index.js";

@@ -7,8 +7,9 @@ import { BriefingScreen } from "./sections/active/BriefingScreen.js";
 import { CurrentJobModal } from "./sections/active/CurrentJobModal.js";
 import { InFlightSurface } from "./sections/flight/InFlightSurface.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
+import { TravelPanel } from "./sections/travel/TravelPanel.js";
 
-type ActiveOverlay = "current" | "brief" | null;
+type ActiveOverlay = "current" | "brief" | "travel" | null;
 
 export default function App() {
   const [overlay, setOverlay] = useState<ActiveOverlay>(null);
@@ -17,7 +18,10 @@ export default function App() {
     <div className="flex h-full bg-ink-850 text-text">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
-        <Header onOpenActiveJob={() => setOverlay("current")} />
+        <Header
+          onOpenActiveJob={() => setOverlay("current")}
+          onOpenTravel={() => setOverlay("travel")}
+        />
         <main className="relative min-h-0 flex-1 overflow-hidden">
           <Routes>
             <Route path="/" element={<Navigate to="/jobs" replace />} />
@@ -50,6 +54,9 @@ export default function App() {
       )}
       {overlay === "brief" && (
         <BriefingScreen onClose={() => setOverlay("current")} />
+      )}
+      {overlay === "travel" && (
+        <TravelPanel onClose={() => setOverlay(null)} />
       )}
 
       <InFlightSurface />

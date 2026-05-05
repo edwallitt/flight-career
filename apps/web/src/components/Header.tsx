@@ -7,14 +7,35 @@ function StatBlock({
   value,
   sub,
   emphasis,
+  onClick,
+  disabledReason,
 }: {
   label: string;
   value: React.ReactNode;
   sub?: React.ReactNode;
   emphasis?: boolean;
+  onClick?: () => void;
+  disabledReason?: string;
 }) {
+  const interactive = onClick != null;
+  const Wrapper = interactive ? "button" : "div";
+  const wrapperProps = interactive
+    ? {
+        type: "button" as const,
+        onClick: disabledReason ? undefined : onClick,
+        title: disabledReason,
+        "aria-disabled": disabledReason ? true : undefined,
+        className: [
+          "flex flex-col px-5 py-2 text-left transition-colors",
+          disabledReason
+            ? "cursor-not-allowed opacity-70"
+            : "hover:bg-amber-glow/[0.05] hover:text-text-high",
+        ].join(" "),
+      }
+    : { className: "flex flex-col px-5 py-2" };
+
   return (
-    <div className="flex flex-col px-5 py-2">
+    <Wrapper {...(wrapperProps as React.HTMLAttributes<HTMLElement>)}>
       <span className="label">{label}</span>
       <span
         className={[
@@ -29,7 +50,7 @@ function StatBlock({
           {sub}
         </span>
       )}
-    </div>
+    </Wrapper>
   );
 }
 
@@ -57,14 +78,20 @@ function CogIcon() {
 
 export function Header({
   onOpenActiveJob,
+  onOpenTravel,
 }: {
   onOpenActiveJob: () => void;
+  onOpenTravel: () => void;
 }) {
   const career = trpc.career.get.useQuery(undefined, {
     refetchInterval: 5_000,
   });
+  const activeJob = trpc.lifecycle.getActiveJob.useQuery(undefined, {
+    refetchInterval: 5_000,
+  });
 
   const data = career.data;
+  const activeJobBlock = activeJob.data != null;
 
   return (
     <header className="flex shrink-0 items-stretch border-b border-ink-600 bg-ink-800/60 backdrop-blur-sm">
@@ -97,6 +124,12 @@ export function Header({
           </span>
         }
         sub={data?.currentLocationName ?? ""}
+        onClick={onOpenTravel}
+        disabledReason={
+          activeJobBlock
+            ? "Cannot travel while a job is active"
+            : undefined
+        }
       />
       <VRule />
 
