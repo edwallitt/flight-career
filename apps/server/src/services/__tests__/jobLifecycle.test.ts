@@ -135,7 +135,24 @@ describe("acceptJob", () => {
 describe("briefJob", () => {
   beforeEach(() => resetTestDb());
 
-  function setupAccepted(): number {
+  function setupAcceptedOwned(opts: { fuelOnBoardGal?: number } = {}): {
+    jobId: number;
+    ownedId: number;
+  } {
+    const ac = insertOwnedAircraft({
+      currentLocationIcao: "CYHZ",
+      fuelOnBoardGal: opts.fuelOnBoardGal ?? 30,
+    });
+    const job = insertJob();
+    acceptJob({
+      jobId: job.id,
+      aircraftSource: "owned",
+      ownedAircraftId: ac.id,
+    });
+    return { jobId: job.id, ownedId: ac.id };
+  }
+
+  function setupAcceptedRental(): number {
     const job = insertJob();
     acceptJob({
       jobId: job.id,
@@ -145,8 +162,8 @@ describe("briefJob", () => {
     return job.id;
   }
 
-  it("deducts cash and locks briefed state", () => {
-    setupAccepted();
+  it("owned: deducts cash, locks briefed, loads fuel into tank", () => {
+    const { ownedId } = setupAcceptedOwned({ fuelOnBoardGal: 20 });
     const before = getCareer().cash;
     const result = briefJob({ fuelGallons: 30 });
     expect(result.ok).toBe(true);
@@ -157,27 +174,65 @@ describe("briefJob", () => {
       (result as { ok: true; fuelCostCents: number }).fuelCostCents,
     );
     expect(after.cash).toBe(before - after.briefedFuelCostCents!);
+    expect(getOwnedAircraft(ownedId).fuelOnBoardGal).toBe(50);
   });
 
-  it("rejects fuel below the operational floor", () => {
-    setupAccepted();
+  it("owned: rejects total fuel below operational minimum", () => {
+    setupAcceptedOwned({ fuelOnBoardGal: 0 });
     const result = briefJob({ fuelGallons: 1 });
     expect(result.ok).toBe(false);
     expect((result as { ok: false; error: string }).error).toMatch(
-      /Fuel below operational minimum/,
+      /below operational minimum/,
     );
   });
 
-  it("rejects when cash is insufficient", () => {
+  it("owned: rejects uplift over tank headroom", () => {
+    // Bonanza G36 capacity is 74 gal — start nearly full and try to over-fill.
+    setupAcceptedOwned({ fuelOnBoardGal: 70 });
+    const result = briefJob({ fuelGallons: 50 });
+    expect(result.ok).toBe(false);
+    expect((result as { ok: false; error: string }).error).toMatch(
+      /tank capacity/,
+    );
+  });
+
+  it("owned: rejects when cash is insufficient", () => {
     resetTestDb({ cash: 100 }); // $1
+    const ac = insertOwnedAircraft({
+      currentLocationIcao: "CYHZ",
+      fuelOnBoardGal: 30,
+    });
     const job = insertJob();
     acceptJob({
       jobId: job.id,
-      aircraftSource: "rental",
-      rentalAircraftTypeId: "bonanza_g36",
+      aircraftSource: "owned",
+      ownedAircraftId: ac.id,
     });
     const result = briefJob({ fuelGallons: 30 });
     expect(result).toEqual({ ok: false, error: "Insufficient cash for fuel" });
+  });
+
+  it("rental: skips fuel entirely (cost = 0, briefed state)", () => {
+    setupAcceptedRental();
+    const before = getCareer().cash;
+    const result = briefJob({ fuelGallons: 0 });
+    expect(result.ok).toBe(true);
+    const after = getCareer();
+    expect(after.activeFlightState).toBe("briefed");
+    expect(after.briefedFuelGallons).toBe(0);
+    expect(after.briefedFuelCostCents).toBe(0);
+    expect(after.cash).toBe(before);
+  });
+
+  it("rental: ignores non-zero fuelGallons input (no charge)", () => {
+    setupAcceptedRental();
+    const before = getCareer().cash;
+    // Even if the client mistakenly sends a positive uplift, rentals never
+    // charge for fuel — the wet rate covers it at completion.
+    const result = briefJob({ fuelGallons: 30 });
+    expect(result.ok).toBe(true);
+    expect(getCareer().briefedFuelCostCents).toBe(0);
+    expect(getCareer().cash).toBe(before);
   });
 
   it("rejects when not in accepted state", () => {
@@ -215,12 +270,16 @@ describe("cancelAcceptedJob", () => {
     expect(getCareer().cash).toBe(before);
   });
 
-  it("from briefed: applies -5/-8 rep, fuel cost is NOT refunded", () => {
+  it("from briefed (owned): applies -5/-8 rep, fuel cost is NOT refunded", () => {
+    const ac = insertOwnedAircraft({
+      currentLocationIcao: "CYHZ",
+      fuelOnBoardGal: 30,
+    });
     const job = insertJob();
     acceptJob({
       jobId: job.id,
-      aircraftSource: "rental",
-      rentalAircraftTypeId: "bonanza_g36",
+      aircraftSource: "owned",
+      ownedAircraftId: ac.id,
     });
     const beforeBrief = getCareer().cash;
     briefJob({ fuelGallons: 30 });
@@ -231,6 +290,23 @@ describe("cancelAcceptedJob", () => {
     expect(result.ok).toBe(true);
     expect(getRep("bush")).toBe(50 - 5);
     expect(getCareer().cash).toBe(afterBrief); // no refund
+  });
+
+  it("from briefed (rental): applies -5/-8 rep, no cash impact", () => {
+    const job = insertJob();
+    acceptJob({
+      jobId: job.id,
+      aircraftSource: "rental",
+      rentalAircraftTypeId: "bonanza_g36",
+    });
+    const beforeBrief = getCareer().cash;
+    briefJob({ fuelGallons: 0 });
+    expect(getCareer().cash).toBe(beforeBrief);
+
+    const result = cancelAcceptedJob();
+    expect(result.ok).toBe(true);
+    expect(getRep("bush")).toBe(50 - 5);
+    expect(getCareer().cash).toBe(beforeBrief);
   });
 
   it("rejects when nothing to cancel", () => {
@@ -314,7 +390,7 @@ describe("completeFlightAction", () => {
     const ac = insertOwnedAircraft({
       currentLocationIcao: "CYHZ",
       hoursSince100hr: 50,
-      fuelOnBoardGal: 70,
+      fuelOnBoardGal: 20,
     });
     const job = insertJob({ payloadLbs: 600, pay: 100_000 });
     acceptJob({

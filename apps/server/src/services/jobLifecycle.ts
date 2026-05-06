@@ -1,13 +1,19 @@
 import {
+  assessRisk,
   checkEligibility,
   completeFlight,
+  generateEvent,
   haversineNm,
+  recommendedFuelUplift,
   type AircraftCandidate,
   type CompleteFlightInput,
   type CompleteFlightOutput,
   type EligibilityAirport,
   type JobRequirements,
   type PlayerState,
+  type RiskAssessment,
+  type RiskTier,
+  type UnscheduledEvent,
 } from "@flightcareer/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../db/client.js";
@@ -17,6 +23,7 @@ import {
   career,
   flights,
   jobs,
+  maintenanceEvents,
   ownedAircraft,
   ratings,
   rentalFleet,
@@ -106,6 +113,30 @@ function loadAirportLite(icaos: string[]): Map<string, EligibilityAirport> {
       },
     ]),
   );
+}
+
+// Hard-limit dispatch check against an already-loaded owned aircraft + type.
+// Caller passes them in to avoid extra reads inside transactions.
+function dispatchVerdict(
+  owned: typeof ownedAircraft.$inferSelect,
+  tboHours: number,
+  simNow: number,
+): { canDispatch: boolean; reason?: string } {
+  const daysSinceAnnual =
+    365 + Math.max(0, (simNow - owned.annualDueAt) / (24 * 60 * 60 * 1000));
+  const assessment = assessRisk({
+    hoursSince100hr: owned.hoursSince100hr,
+    hoursSinceAnnual: daysSinceAnnual,
+    engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
+    tboHours,
+    airframeHours: owned.airframeHours,
+  });
+  return {
+    canDispatch: !assessment.cannotDispatch,
+    ...(assessment.cannotDispatchReason
+      ? { reason: assessment.cannotDispatchReason }
+      : {}),
+  };
 }
 
 function clampRep(score: number): number {
@@ -277,6 +308,34 @@ export function acceptJob(input: AcceptJobInput): LifecycleResult {
       };
     }
 
+    // Soft-block: refuse to accept a job with an owned aircraft past hard
+    // maintenance limits. Defense in depth — the UI also disables the chip.
+    if (input.aircraftSource === "owned") {
+      const ownedForCheck = tx
+        .select()
+        .from(ownedAircraft)
+        .where(eq(ownedAircraft.id, input.ownedAircraftId!))
+        .get();
+      const typeForCheck = tx
+        .select()
+        .from(aircraftTypes)
+        .where(eq(aircraftTypes.id, candidate.aircraftTypeId))
+        .get();
+      if (ownedForCheck && typeForCheck) {
+        const verdict = dispatchVerdict(
+          ownedForCheck,
+          typeForCheck.tboHours,
+          careerRow.simDateTime,
+        );
+        if (!verdict.canDispatch) {
+          return {
+            ok: false,
+            error: `Cannot dispatch: ${verdict.reason ?? "aircraft past hard limits"}`,
+          };
+        }
+      }
+    }
+
     // Persist.
     tx.update(jobs)
       .set({ status: "accepted", acceptedAt: careerRow.simDateTime })
@@ -332,14 +391,46 @@ export function cancelAcceptedJob(): LifecycleResult {
       .get();
     if (!jobRow) return { ok: false, error: "Active job not found" };
 
-    const hits = REP_HIT_BY_STATE[state];
-    adjustReputation(jobRow.role, hits.role, careerRow.simDateTime);
-    if (jobRow.clientId) {
-      adjustReputation(
-        `client:${jobRow.clientId}`,
-        hits.client,
-        careerRow.simDateTime,
-      );
+    // If the active aircraft has crossed a hard maintenance limit since
+    // accept, the player can't dispatch. Cancelling under that condition
+    // is forced — waive the reputation penalty.
+    let waiveRepPenalty = false;
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      const ownedForCheck = tx
+        .select()
+        .from(ownedAircraft)
+        .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+        .get();
+      if (ownedForCheck) {
+        const typeForCheck = tx
+          .select()
+          .from(aircraftTypes)
+          .where(eq(aircraftTypes.id, ownedForCheck.aircraftTypeId))
+          .get();
+        if (typeForCheck) {
+          const verdict = dispatchVerdict(
+            ownedForCheck,
+            typeForCheck.tboHours,
+            careerRow.simDateTime,
+          );
+          waiveRepPenalty = !verdict.canDispatch;
+        }
+      }
+    }
+
+    if (!waiveRepPenalty) {
+      const hits = REP_HIT_BY_STATE[state];
+      adjustReputation(jobRow.role, hits.role, careerRow.simDateTime);
+      if (jobRow.clientId) {
+        adjustReputation(
+          `client:${jobRow.clientId}`,
+          hits.client,
+          careerRow.simDateTime,
+        );
+      }
     }
 
     // Briefed fuel is NOT refunded on cancel — the fuel was bought, it's gone.
@@ -394,7 +485,7 @@ export interface BriefJobInput {
 }
 
 export type BriefResult =
-  | { ok: true; fuelCostCents: number }
+  | { ok: true; fuelCostCents: number; fuelGallons: number }
   | { ok: false; error: string };
 
 export function activeAircraftType(
@@ -439,8 +530,11 @@ export function recommendedFuelGallons(
 }
 
 export function briefJob(input: BriefJobInput): BriefResult {
-  if (!Number.isFinite(input.fuelGallons) || input.fuelGallons <= 0) {
-    return { ok: false, error: "Fuel gallons must be positive" };
+  // Rentals skip the fuel-uplift step entirely (wet rate includes fuel), so
+  // a non-positive fuel input is OK for them. Owned aircraft still require
+  // a positive uplift.
+  if (!Number.isFinite(input.fuelGallons) || input.fuelGallons < 0) {
+    return { ok: false, error: "Fuel gallons must be non-negative" };
   }
 
   return db.transaction((tx): BriefResult => {
@@ -481,6 +575,47 @@ export function briefJob(input: BriefJobInput): BriefResult {
       .get();
     if (!typeRow) return { ok: false, error: "Aircraft type not found" };
 
+    // Rental path: wet rate includes fuel — no uplift, no separate cost.
+    // Aircraft is conceptually delivered fueled and ready.
+    if (careerRow.activeAircraftSource === "rental") {
+      tx.update(career)
+        .set({
+          activeFlightState: "briefed",
+          briefedFuelGallons: 0,
+          briefedFuelCostCents: 0,
+        })
+        .where(eq(career.id, 1))
+        .run();
+      return { ok: true, fuelCostCents: 0, fuelGallons: 0 };
+    }
+
+    // Soft-block: defense-in-depth check at brief time. An aircraft could
+    // have crossed a hard limit between accept and brief if maintenance was
+    // delayed across calendar boundaries.
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      const ownedForCheck = tx
+        .select()
+        .from(ownedAircraft)
+        .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+        .get();
+      if (ownedForCheck) {
+        const verdict = dispatchVerdict(
+          ownedForCheck,
+          typeRow.tboHours,
+          careerRow.simDateTime,
+        );
+        if (!verdict.canDispatch) {
+          return {
+            ok: false,
+            error: `Cannot dispatch: ${verdict.reason ?? "aircraft past hard limits"}`,
+          };
+        }
+      }
+    }
+
     const destRow = tx
       .select()
       .from(airports)
@@ -488,9 +623,31 @@ export function briefJob(input: BriefJobInput): BriefResult {
       .get();
     if (!destRow) return { ok: false, error: "Destination airport not found" };
 
-    // Enforce a sensible fuel floor: at least 60% of the recommendation, and
-    // at least 1 gallon. Without this, a player could brief at trivial fuel
-    // (1¢ cost) and trivialize the briefing commitment.
+    // Owned-aircraft fuel uplift. Floor is the larger of: 60% of total
+    // recommended fuel for the trip (above current on-board), or 1 gallon.
+    // Without a floor a player could brief at trivial fuel (1¢ cost) and
+    // trivialize the briefing commitment.
+    if (careerRow.activeAircraftOwnedId == null) {
+      return { ok: false, error: "Owned aircraft id missing" };
+    }
+    const ownedRow = tx
+      .select()
+      .from(ownedAircraft)
+      .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+      .get();
+    if (!ownedRow) return { ok: false, error: "Owned aircraft not found" };
+
+    const headroomGal = Math.max(
+      0,
+      typeRow.fuelCapacityGal - ownedRow.fuelOnBoardGal,
+    );
+    if (input.fuelGallons > headroomGal + 1e-6) {
+      return {
+        ok: false,
+        error: `Uplift exceeds tank capacity (${headroomGal.toFixed(0)} gal headroom)`,
+      };
+    }
+
     const distanceNm = haversineNm(
       { lat: originRow.lat, lon: originRow.lon },
       { lat: destRow.lat, lon: destRow.lon },
@@ -500,13 +657,17 @@ export function briefJob(input: BriefJobInput): BriefResult {
       typeRow.cruiseSpeedKts,
       typeRow.fuelBurnGph,
     );
-    const minGallons = Math.max(1, Math.ceil(recommended * FUEL_FLOOR_FRACTION));
-    if (input.fuelGallons < minGallons) {
+    // Total fuel available for the leg = current on-board + uplift. The floor
+    // applies to the *total*, not the uplift — if the player is already well-
+    // fueled, a small (or zero) uplift is fine.
+    const totalAfterUplift = ownedRow.fuelOnBoardGal + input.fuelGallons;
+    const minTotal = Math.max(1, Math.ceil(recommended * FUEL_FLOOR_FRACTION));
+    if (totalAfterUplift < minTotal) {
       return {
         ok: false,
-        error: `Fuel below operational minimum (${minGallons} gal · ~${Math.round(
+        error: `Total fuel below operational minimum (${minTotal} gal · ~${Math.round(
           FUEL_FLOOR_FRACTION * 100,
-        )}% of ${recommended})`,
+        )}% of ${recommended} recommended)`,
       };
     }
 
@@ -530,7 +691,21 @@ export function briefJob(input: BriefJobInput): BriefResult {
       .where(eq(career.id, 1))
       .run();
 
-    return { ok: true, fuelCostCents };
+    // Actually load the uplift into the aircraft's tanks so the fuel state
+    // shown in the hangar / next briefing reflects what the player paid for.
+    if (input.fuelGallons > 0) {
+      tx.update(ownedAircraft)
+        .set({
+          fuelOnBoardGal: Math.min(
+            typeRow.fuelCapacityGal,
+            ownedRow.fuelOnBoardGal + input.fuelGallons,
+          ),
+        })
+        .where(eq(ownedAircraft.id, ownedRow.id))
+        .run();
+    }
+
+    return { ok: true, fuelCostCents, fuelGallons: input.fuelGallons };
   });
 }
 
@@ -547,6 +722,11 @@ export interface ActiveAircraftInfo {
   cruiseSpeedKts: number;
   fuelBurnGph: number;
   fuelType: "avgas" | "jet-a";
+  fuelCapacityGal: number;
+  // For owned aircraft this is what's actually in the tanks. For rentals the
+  // wet rate covers fuel and the aircraft is conceptually delivered full —
+  // we surface fuelCapacityGal here so the UI can show "starts full".
+  currentFuelGal: number;
   rangeNm: number;
   maxPayloadLbs: number;
   rentalRatePerHour: number;
@@ -583,10 +763,22 @@ export interface ActiveJobSnapshot {
   briefedFuelCostCents: number | null;
   fuelPriceCentsPerGal: number;
   recommendedFuelGallons: number;
+  // Recommended uplift (gallons) given current fuel state and the trip — the
+  // UI seeds the input from this. Always 0 for rentals (no uplift step).
+  recommendedFuelUpliftGallons: number;
   // Reputation deltas the player will pay if they cancel from this state.
   // Server is the single source of truth — UI reads this rather than
   // hardcoding the numbers.
   cancelPenalty: { role: number; client: number };
+  // Maintenance risk for owned aircraft. Null for rentals.
+  risk: ActiveJobRiskInfo | null;
+}
+
+export interface ActiveJobRiskInfo {
+  tier: RiskTier;
+  factors: Array<{ description: string; severity: string }>;
+  cannotDispatch: boolean;
+  cannotDispatchReason: string | null;
 }
 
 export function getActiveJob(): ActiveJobSnapshot | null {
@@ -631,6 +823,10 @@ export function getActiveJob(): ActiveJobSnapshot | null {
   let ownedAircraftId: number | null = null;
   let tailNumber: string | null = null;
   let aircraftLocation = careerRow.currentLocationIcao;
+  let risk: ActiveJobRiskInfo | null = null;
+  // Owned aircraft: show actual on-board fuel. Rental: conceptually full at
+  // delivery, so we report capacity for the briefing's range/reserves math.
+  let currentFuelGal = typeRow.fuelCapacityGal;
   if (
     careerRow.activeAircraftSource === "owned" &&
     careerRow.activeAircraftOwnedId != null
@@ -644,6 +840,35 @@ export function getActiveJob(): ActiveJobSnapshot | null {
       ownedAircraftId = ownedRow.id;
       tailNumber = ownedRow.tailNumber;
       aircraftLocation = ownedRow.currentLocationIcao;
+      currentFuelGal = ownedRow.fuelOnBoardGal;
+      // Risk assessment is only meaningful pre-flight. Once the flight is
+      // in_progress the hours haven't been added yet, so the figures here
+      // would be stale by the time anything renders them.
+      if (careerRow.activeFlightState !== "in_progress") {
+        const daysSinceAnnual =
+          365 +
+          Math.max(
+            0,
+            (careerRow.simDateTime - ownedRow.annualDueAt) /
+              (24 * 60 * 60 * 1000),
+          );
+        const assessment = assessRisk({
+          hoursSince100hr: ownedRow.hoursSince100hr,
+          hoursSinceAnnual: daysSinceAnnual,
+          engineHoursSinceOverhaul: ownedRow.engineHoursSinceOverhaul,
+          tboHours: typeRow.tboHours,
+          airframeHours: ownedRow.airframeHours,
+        });
+        risk = {
+          tier: assessment.tier,
+          factors: assessment.factors.map((f) => ({
+            description: f.description,
+            severity: f.severity,
+          })),
+          cannotDispatch: assessment.cannotDispatch,
+          cannotDispatchReason: assessment.cannotDispatchReason ?? null,
+        };
+      }
     }
   }
 
@@ -657,6 +882,16 @@ export function getActiveJob(): ActiveJobSnapshot | null {
     typeRow.cruiseSpeedKts,
     typeRow.fuelBurnGph,
   );
+  const recommendedUplift =
+    careerRow.activeAircraftSource === "rental"
+      ? 0
+      : recommendedFuelUplift({
+          distanceNm,
+          cruiseSpeedKts: typeRow.cruiseSpeedKts,
+          fuelBurnGph: typeRow.fuelBurnGph,
+          fuelCapacityGal: typeRow.fuelCapacityGal,
+          currentFuelGal,
+        });
 
   // Cancel penalty surfaced to the UI depends on lifecycle state. accepted/
   // briefed use the cancel magnitudes; in_progress uses the abort magnitudes
@@ -698,6 +933,8 @@ export function getActiveJob(): ActiveJobSnapshot | null {
       cruiseSpeedKts: typeRow.cruiseSpeedKts,
       fuelBurnGph: typeRow.fuelBurnGph,
       fuelType: typeRow.fuelType,
+      fuelCapacityGal: typeRow.fuelCapacityGal,
+      currentFuelGal,
       rangeNm: typeRow.rangeNm,
       maxPayloadLbs: typeRow.maxPayloadLbs,
       rentalRatePerHour: typeRow.rentalRatePerHour,
@@ -712,7 +949,9 @@ export function getActiveJob(): ActiveJobSnapshot | null {
       origin.baseFuelMultiplier,
     ),
     recommendedFuelGallons: recommended,
+    recommendedFuelUpliftGallons: recommendedUplift,
     cancelPenalty: { role: penalty.role, client: penalty.client },
+    risk,
   };
 }
 
@@ -733,6 +972,38 @@ export function beginFlight(): BeginFlightResult {
         ok: false,
         error: `Cannot begin flight in state ${careerRow.activeFlightState ?? "(none)"}`,
       };
+    }
+
+    // Final defense before the wheels move.
+    if (
+      careerRow.activeAircraftSource === "owned" &&
+      careerRow.activeAircraftOwnedId != null
+    ) {
+      const ownedForCheck = tx
+        .select()
+        .from(ownedAircraft)
+        .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+        .get();
+      if (ownedForCheck) {
+        const typeRow = tx
+          .select()
+          .from(aircraftTypes)
+          .where(eq(aircraftTypes.id, ownedForCheck.aircraftTypeId))
+          .get();
+        if (typeRow) {
+          const verdict = dispatchVerdict(
+            ownedForCheck,
+            typeRow.tboHours,
+            careerRow.simDateTime,
+          );
+          if (!verdict.canDispatch) {
+            return {
+              ok: false,
+              error: `Cannot dispatch: ${verdict.reason ?? "aircraft past hard limits"}`,
+            };
+          }
+        }
+      }
     }
 
     const startedAt = careerRow.simDateTime;
@@ -769,15 +1040,38 @@ export function beginFlight(): BeginFlightResult {
 const HUNDRED_HR_INSPECTION_THRESHOLD = 100;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
+// Cheap LCG seeded by mixing a job id and a sim-time stamp. Same input pair
+// always yields the same outcome — so a re-played flight produces the same
+// unscheduled-event roll. Mixing high and low halves of simNow keeps the seed
+// distinguishable across long time horizons (the lower 32 bits of a unix-ms
+// timestamp wrap every ~50 days; without mixing, distant flights with the
+// same job id could collide).
+function seededRngFor(jobId: number, simNow: number): () => number {
+  const hi = Math.floor(simNow / 0x1_0000_0000) >>> 0;
+  const lo = (simNow >>> 0) ^ Math.imul(jobId | 0, 2654435761);
+  let s = ((hi ^ lo) >>> 0) || 1;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x1_0000_0000;
+  };
+}
+
 export interface CompleteFlightActionInput {
   actualDestinationIcao: string;
   blockTimeMinutes: number;
   fuelBurnedGal?: number;
 }
 
+export interface PostFlightUnscheduledEvent extends UnscheduledEvent {
+  eventId: number;
+  riskTier: RiskTier;
+  scheduledCompletionAt: number | null;
+}
+
 export interface CompletionSummaryPayload extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
+  unscheduledEvent: PostFlightUnscheduledEvent | null;
   // Geographic route data so the summary modal can render an actual chart.
   // `planned*` differs from actual when the pilot diverted.
   route: {
@@ -987,6 +1281,7 @@ export function completeFlightAction(
 
     // Owned aircraft updates
     const inspectionLines: string[] = [];
+    let postFlightOwned: typeof ownedAircraft.$inferSelect | null = null;
     if (ownedAircraftRow && summary.aircraftUpdates) {
       const upd = summary.aircraftUpdates;
       const newAirframe = ownedAircraftRow.airframeHours + upd.blockHoursAdded;
@@ -1031,6 +1326,112 @@ export function completeFlightAction(
             : "Annual inspection due now",
         );
       }
+
+      // Snapshot the just-updated owned aircraft state for risk assessment.
+      postFlightOwned = {
+        ...ownedAircraftRow,
+        airframeHours: newAirframe,
+        engineHoursSinceOverhaul: newEngineSinceOH,
+        hoursSince100hr: newSince100,
+        hoursSinceAnnual: newSinceAnnual,
+        fuelOnBoardGal: newFuel,
+        currentLocationIcao: actualDest,
+        status: "available",
+      };
+    }
+
+    // -----------------------------------------------------------------
+    // Unscheduled-event risk roll. Owned aircraft only — rentals are
+    // someone else's maintenance problem.
+    //
+    // Note: an unscheduled event grounds the aircraft wherever it just
+    // landed, regardless of whether the airport has maintenance. Treat
+    // this as fly-out mechanics — the work happens where the aircraft is.
+    // -----------------------------------------------------------------
+    let unscheduledOut: PostFlightUnscheduledEvent | null = null;
+    if (postFlightOwned && summary.aircraftUpdates) {
+      // Translate days-since-last-annual from the annualDueAt anchor so it
+      // matches the pure logic's expectations (>365 = overdue).
+      const daysSinceAnnual =
+        365 + Math.max(0, (simNow - postFlightOwned.annualDueAt) / MS_PER_DAY);
+
+      const assessment: RiskAssessment = assessRisk({
+        hoursSince100hr: postFlightOwned.hoursSince100hr,
+        hoursSinceAnnual: daysSinceAnnual,
+        engineHoursSinceOverhaul: postFlightOwned.engineHoursSinceOverhaul,
+        tboHours: typeRow.tboHours,
+        airframeHours: postFlightOwned.airframeHours,
+      });
+
+      const blockHoursForRoll = summary.aircraftUpdates.blockHoursAdded;
+      const flightProb = Math.min(
+        0.5,
+        assessment.probabilityPerFlightHour * blockHoursForRoll,
+      );
+
+      // Deterministic per-flight rng — same flight id + ended-at always
+      // yields the same outcome.
+      const rng = seededRngFor(jobRow.id, simNow);
+      if (rng() < flightProb) {
+        const event = generateEvent({
+          riskTier: assessment.tier,
+          factors: assessment.factors,
+          aircraftType: {
+            fuelType: typeRow.fuelType,
+            aircraftClass: typeRow.class,
+            overhaulCostCents: typeRow.overhaulCost,
+            annualCostCents: typeRow.annualCost,
+          },
+          rng,
+        });
+
+        const groundedMs = event.groundedDays * MS_PER_DAY;
+        const scheduledCompletionAt = event.groundedDays > 0 ? simNow + groundedMs : null;
+        const status: "in_progress" | "completed" =
+          event.groundedDays > 0 ? "in_progress" : "completed";
+
+        const insert = tx
+          .insert(maintenanceEvents)
+          .values({
+            ownedAircraftId: postFlightOwned.id,
+            type: "unscheduled",
+            cost: event.costCents,
+            startedAt: simNow,
+            scheduledCompletionAt,
+            completedAt: status === "completed" ? simNow : null,
+            description: event.description,
+            status,
+          })
+          .run();
+
+        // Deduct event cost from cash. Career row was already updated
+        // earlier in this txn — re-read to get the current value. The row
+        // must exist (we read it at the top of the txn); if it's gone now,
+        // something has corrupted the txn state, so abort hard rather than
+        // silently dropping the deduction.
+        const careerNow = tx.select().from(career).where(eq(career.id, 1)).get();
+        if (!careerNow) {
+          throw new Error("Career row vanished mid-completion");
+        }
+        tx.update(career)
+          .set({ cash: careerNow.cash - event.costCents })
+          .where(eq(career.id, 1))
+          .run();
+
+        if (event.groundedDays > 0) {
+          tx.update(ownedAircraft)
+            .set({ status: "in_maintenance" })
+            .where(eq(ownedAircraft.id, postFlightOwned.id))
+            .run();
+        }
+
+        unscheduledOut = {
+          ...event,
+          eventId: Number(insert.lastInsertRowid),
+          riskTier: assessment.tier,
+          scheduledCompletionAt,
+        };
+      }
     }
 
     // Flight log entry. endedAt is derived from startedAt + block time so the
@@ -1070,10 +1471,14 @@ export function completeFlightAction(
       .where(eq(jobs.id, jobRow.id))
       .run();
 
+    const cashAppliedNow =
+      summary.netCashDelta - (unscheduledOut?.costCents ?? 0);
+
     const finalSummary: CompletionSummaryPayload = {
       ...summary,
       inspectionAlerts: inspectionLines,
-      cashAppliedNow: summary.netCashDelta,
+      cashAppliedNow,
+      unscheduledEvent: unscheduledOut,
       route: {
         originIcao: jobOriginRow.icao,
         originName: jobOriginRow.name,

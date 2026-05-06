@@ -7,6 +7,7 @@ import { healthRouter } from "./routers/health.js";
 import { jobsRouter } from "./routers/jobs.js";
 import { lifecycleRouter } from "./routers/lifecycle.js";
 import { logbookRouter } from "./routers/logbook.js";
+import { maintenanceRouter } from "./routers/maintenance.js";
 import { marketplaceRouter } from "./routers/marketplace.js";
 import { travelRouter } from "./routers/travel.js";
 import { router } from "./trpc.js";
@@ -23,6 +24,7 @@ export const appRouter = router({
   hangar: hangarRouter,
   logbook: logbookRouter,
   atlas: atlasRouter,
+  maintenance: maintenanceRouter,
 });
 
 export type AppRouter = typeof appRouter;

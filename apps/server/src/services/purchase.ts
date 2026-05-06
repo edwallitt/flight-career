@@ -174,6 +174,7 @@ export function executePurchase(input: ExecutePurchaseInput): ExecuteResult {
         purchasedAt: careerRow.simDateTime,
         purchasePrice: askingPriceCents,
         loanId: null,
+        nextMonthlyCostAt: careerRow.simDateTime + 30 * SIM_DAY_MS,
       })
       .run();
 

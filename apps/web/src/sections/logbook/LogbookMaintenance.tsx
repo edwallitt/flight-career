@@ -15,6 +15,18 @@ const TYPE_TONE: Record<string, string> = {
   unscheduled: "border-urgency-critical/50 text-urgency-critical bg-urgency-critical/[0.06]",
 };
 
+const STATUS_TONE: Record<string, string> = {
+  in_progress: "border-amber-deep/60 text-amber-glow bg-amber-glow/[0.06]",
+  completed: "border-emerald-500/40 text-emerald-300 bg-emerald-500/[0.06]",
+  cancelled: "border-ink-600 text-muted-dim bg-ink-750",
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  in_progress: "In progress",
+  completed: "Completed",
+  cancelled: "Cancelled",
+};
+
 export function LogbookMaintenance() {
   const query = trpc.logbook.maintenance.useQuery(undefined, {
     refetchInterval: 60_000,
@@ -36,6 +48,7 @@ export function LogbookMaintenance() {
               <Th className="w-[180px]">Date</Th>
               <Th>Aircraft</Th>
               <Th className="w-[140px]">Type</Th>
+              <Th className="w-[120px]">Status</Th>
               <Th className="w-[120px] text-right">Cost</Th>
               <Th>Description</Th>
             </tr>
@@ -55,6 +68,16 @@ export function LogbookMaintenance() {
                     ].join(" ")}
                   >
                     {TYPE_LABEL[r.type] ?? r.type}
+                  </span>
+                </Td>
+                <Td>
+                  <span
+                    className={[
+                      "inline-flex items-center rounded-sm border px-2 py-0.5 font-mono text-[10px] uppercase tracking-callsign",
+                      STATUS_TONE[r.status] ?? "",
+                    ].join(" ")}
+                  >
+                    {STATUS_LABEL[r.status] ?? r.status}
                   </span>
                 </Td>
                 <Td className="text-right font-mono tabular-nums text-urgency-critical">

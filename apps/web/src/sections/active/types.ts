@@ -26,4 +26,5 @@ export const REASON_LABEL: Record<string, string> = {
   AIRCRAFT_UNAVAILABLE: "Unavailable",
   RUNWAY_TOO_SHORT: "Runway short",
   CAPABILITY_MISSING: "Capability missing",
+  CANNOT_DISPATCH: "Cannot dispatch",
 };

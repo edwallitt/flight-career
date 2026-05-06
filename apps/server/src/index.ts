@@ -18,6 +18,10 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { processExams } from "./services/career.js";
 import { tickJobGeneration } from "./services/jobBoard.js";
+import {
+  processMaintenanceCompletions,
+  processMonthlyOwnership,
+} from "./services/maintenance.js";
 import { refreshMarketplace } from "./services/marketplace.js";
 import { processLoanPayments } from "./services/purchase.js";
 import { appRouter } from "./trpc/router.js";
@@ -66,6 +70,26 @@ setInterval(() => {
     }
   } catch (err) {
     console.error("[exams] failed:", err);
+  }
+
+  try {
+    const mr = processMaintenanceCompletions();
+    if (mr.resolved > 0) {
+      console.log(`[maintenance] ${mr.resolved} event(s) resolved`);
+    }
+  } catch (err) {
+    console.error("[maintenance] failed:", err);
+  }
+
+  try {
+    const ownership = processMonthlyOwnership();
+    if (ownership.applied > 0) {
+      console.log(
+        `[ownership] ${ownership.applied} deduction(s), -$${(ownership.totalDeductedCents / 100).toLocaleString()}`,
+      );
+    }
+  } catch (err) {
+    console.error("[ownership] failed:", err);
   }
 
   tickCount++;

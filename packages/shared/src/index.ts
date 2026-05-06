@@ -15,3 +15,4 @@ export * from "./lifecycle/index.js";
 export * from "./travel/index.js";
 export * from "./marketplace/index.js";
 export * from "./career/index.js";
+export * from "./maintenance/index.js";

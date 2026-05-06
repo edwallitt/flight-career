@@ -1,6 +1,10 @@
-import type { CompleteFlightOutput } from "@flightcareer/shared";
+import type {
+  CompleteFlightOutput,
+  EventSeverity,
+  RiskTier,
+} from "@flightcareer/shared";
 import { useEffect, useRef, useState } from "react";
-import { formatCash } from "../../lib/formatters.js";
+import { formatCash, formatSimDateTime } from "../../lib/formatters.js";
 import {
   RouteMap,
   type MapAirport,
@@ -23,9 +27,21 @@ export interface CompletionSummaryRoute {
   isDiversion: boolean;
 }
 
+export interface CompletionUnscheduledEvent {
+  eventId: number;
+  riskTier: RiskTier;
+  severity: EventSeverity;
+  costCents: number;
+  groundedDays: number;
+  description: string;
+  causeFactors: string[];
+  scheduledCompletionAt: number | null;
+}
+
 export interface CompletionSummaryData extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
+  unscheduledEvent: CompletionUnscheduledEvent | null;
   route: CompletionSummaryRoute;
 }
 
@@ -225,10 +241,12 @@ export function CompletionSummary({
   const cfg = BANNER_CONFIG[banner];
 
   // Round-trip profit on this job: revenue minus every cost (including the
-  // fuel that was paid pre-flight). cashAppliedNow is the smaller delta that
-  // hits the cash account at the moment of completion (fuel was already
-  // deducted at brief time, so it isn't subtracted again here).
-  const profit = summary.grossRevenue - summary.totalCosts;
+  // fuel that was paid pre-flight, and any unscheduled-maintenance bill the
+  // flight triggered). cashAppliedNow is the smaller delta that hits the
+  // cash account at the moment of completion (fuel was already deducted at
+  // brief time, so it isn't subtracted again here).
+  const eventCost = summary.unscheduledEvent?.costCents ?? 0;
+  const profit = summary.grossRevenue - summary.totalCosts - eventCost;
 
   // Pull origin/destination + block time from the canonical flight log entry.
   const { originIcao, destinationIcao, blockTimeMinutes } = summary.flightLogEntry;
@@ -333,6 +351,10 @@ export function CompletionSummary({
             />
           </div>
 
+          {summary.unscheduledEvent && (
+            <UnscheduledEventCard event={summary.unscheduledEvent} />
+          )}
+
           <div className="grid grid-cols-2 gap-5">
             {/* Financial breakdown */}
             <div className="rounded-sm border border-ink-600 bg-ink-750 p-5">
@@ -383,6 +405,14 @@ export function CompletionSummary({
                   <CashLine
                     label="Refuel at dest"
                     cents={summary.destinationRefuelCost}
+                    sign="-"
+                    emphasis="negative"
+                  />
+                )}
+                {eventCost > 0 && (
+                  <CashLine
+                    label="Unscheduled maint."
+                    cents={eventCost}
                     sign="-"
                     emphasis="negative"
                   />
@@ -503,6 +533,85 @@ export function CompletionSummary({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function UnscheduledEventCard({
+  event,
+}: {
+  event: CompletionUnscheduledEvent;
+}) {
+  const isSevere = event.severity === "severe";
+  const tone = isSevere
+    ? {
+        border: "border-urgency-critical/70",
+        bg: "bg-urgency-critical/[0.06]",
+        accent: "text-urgency-critical",
+        rule: "bg-urgency-critical/30",
+      }
+    : {
+        border: "border-urgency-urgent/60",
+        bg: "bg-urgency-urgent/[0.06]",
+        accent: "text-urgency-urgent",
+        rule: "bg-urgency-urgent/30",
+      };
+
+  return (
+    <div
+      className={`rounded-sm border ${tone.border} ${tone.bg} p-5`}
+    >
+      <div className="flex items-center gap-2">
+        <span className={`label ${tone.accent}`}>
+          ⚠ Unscheduled maintenance
+        </span>
+        <span className={`h-px flex-1 ${tone.rule}`} />
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+          {event.severity}
+        </span>
+      </div>
+
+      <div className="mt-3 font-display text-[18px] font-medium text-text-high">
+        {event.description}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-4 font-mono text-tiny">
+        <div className="flex flex-col">
+          <span className="label">Cost</span>
+          <span className={`mt-0.5 tabular-nums ${tone.accent}`}>
+            − {formatCash(event.costCents)}
+          </span>
+        </div>
+        {event.groundedDays > 0 && (
+          <div className="flex flex-col">
+            <span className="label">Aircraft grounded</span>
+            <span className="mt-0.5 tabular-nums text-text-high">
+              {event.groundedDays} sim day{event.groundedDays === 1 ? "" : "s"}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <div className="label">Contributing factors</div>
+        {event.causeFactors.length > 0 ? (
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 font-mono text-tiny text-text">
+            {event.causeFactors.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        ) : (
+          <div className="mt-1 font-mono text-tiny text-muted">
+            Routine wear and tear — nothing was overdue.
+          </div>
+        )}
+      </div>
+
+      {event.groundedDays > 0 && event.scheduledCompletionAt != null && (
+        <div className="mt-3 font-mono text-tiny text-muted">
+          Aircraft available again {formatSimDateTime(event.scheduledCompletionAt)}
+        </div>
+      )}
     </div>
   );
 }

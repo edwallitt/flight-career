@@ -1,4 +1,5 @@
 import {
+  assessRisk,
   rankCandidates,
   type AircraftCandidate,
   type EligibilityAirport,
@@ -24,12 +25,28 @@ export interface CandidateDisplay {
   model: string;
   cruiseSpeedKts: number;
   fuelBurnGph: number;
+  fuelCapacityGal: number;
   fuelType: "avgas" | "jet-a";
   rentalRatePerHour: number;
 }
 
+// Fuel snapshot per ranked candidate. Rentals are conceptually full (the wet
+// rate covers fuel), so the UI can render a "fueled at start" label without
+// needing to track per-rental state.
+export interface CandidateFuelInfo {
+  source: "owned" | "rental";
+  currentFuelGal: number;
+  fuelCapacityGal: number;
+  estimatedRangeNm: number;
+  // null for rentals — they don't have a maintenance/fuel state to flag.
+  // For owned: 'sufficient' | 'top_up' | 'insufficient' for the trip.
+  status: "sufficient" | "top_up" | "insufficient" | "rental";
+}
+
 export interface RankedCandidateWithDisplay extends RankedCandidate {
   display: CandidateDisplay;
+  fuel: CandidateFuelInfo;
+  cannotDispatchReason?: string;
 }
 
 export interface CandidatesForJobResult {
@@ -194,27 +211,122 @@ export async function getCandidatesForJob(
   // Build a typeId -> display lookup once.
   const typeRows = db.select().from(aircraftTypes).all();
   const displayByTypeId = new Map<string, CandidateDisplay>();
+  const tboByTypeId = new Map<string, number>();
+  const typeById = new Map<string, typeof aircraftTypes.$inferSelect>();
   for (const t of typeRows) {
     displayByTypeId.set(t.id, {
       manufacturer: t.manufacturer,
       model: t.model,
       cruiseSpeedKts: t.cruiseSpeedKts,
       fuelBurnGph: t.fuelBurnGph,
+      fuelCapacityGal: t.fuelCapacityGal,
       fuelType: t.fuelType,
       rentalRatePerHour: t.rentalRatePerHour,
     });
+    tboByTypeId.set(t.id, t.tboHours);
+    typeById.set(t.id, t);
   }
-  const rankedWithDisplay: RankedCandidateWithDisplay[] = ranked.map((r) => ({
-    ...r,
-    display: displayByTypeId.get(r.candidate.aircraftTypeId) ?? {
+
+  // Owned aircraft maintenance state — used to attach CANNOT_DISPATCH for
+  // aircraft past hard limits.
+  const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
+  const simNow = careerRow?.simDateTime ?? Date.now();
+  const ownedRows = db.select().from(ownedAircraft).all();
+  const ownedById = new Map<number, typeof ownedAircraft.$inferSelect>();
+  for (const o of ownedRows) ownedById.set(o.id, o);
+
+  const rankedWithDisplay: RankedCandidateWithDisplay[] = ranked.map((r) => {
+    const display = displayByTypeId.get(r.candidate.aircraftTypeId) ?? {
       manufacturer: "",
       model: r.candidate.aircraftTypeId,
       cruiseSpeedKts: 0,
       fuelBurnGph: 0,
-      fuelType: "avgas",
+      fuelCapacityGal: 0,
+      fuelType: "avgas" as const,
       rentalRatePerHour: 0,
-    },
-  }));
+    };
+    const t = typeById.get(r.candidate.aircraftTypeId);
+    const fuelCapacity = t?.fuelCapacityGal ?? 0;
+    const fuelBurn = t?.fuelBurnGph ?? 0;
+    const cruise = t?.cruiseSpeedKts ?? 0;
+
+    // Operational range estimate: usable fuel (after a 45-min reserve) at
+    // cruise burn. For owned uses actual on-board fuel; rentals are full.
+    const reserveGal = 0.75 * fuelBurn;
+    let currentFuelGal = fuelCapacity;
+    if (r.candidate.source === "owned" && r.candidate.ownedAircraftId != null) {
+      const owned = ownedById.get(r.candidate.ownedAircraftId);
+      if (owned) currentFuelGal = owned.fuelOnBoardGal;
+    }
+    const usableGal = Math.max(0, currentFuelGal - reserveGal);
+    const estimatedRangeNm =
+      fuelBurn > 0 && cruise > 0 ? (usableGal / fuelBurn) * cruise : 0;
+
+    let fuelStatus: CandidateFuelInfo["status"] = "rental";
+    if (r.candidate.source === "owned") {
+      // Threshold: comfortable for the trip with 45-min reserve. The
+      // recommended-uplift logic in jobLifecycle does the same comparison
+      // but with a 5% contingency — keep this lighter so "top_up" doesn't
+      // trip on every borderline trip.
+      if (estimatedRangeNm < job.distanceNm) {
+        fuelStatus = "insufficient";
+      } else if (estimatedRangeNm < job.distanceNm * 1.1) {
+        fuelStatus = "top_up";
+      } else {
+        fuelStatus = "sufficient";
+      }
+    }
+    const fuel: CandidateFuelInfo = {
+      source: r.candidate.source,
+      currentFuelGal,
+      fuelCapacityGal: fuelCapacity,
+      estimatedRangeNm,
+      status: fuelStatus,
+    };
+
+    let eligibility = r.eligibility;
+    let preferenceScore = r.preferenceScore;
+    let cannotDispatchReason: string | undefined;
+    if (r.candidate.source === "owned" && r.candidate.ownedAircraftId != null) {
+      const owned = ownedById.get(r.candidate.ownedAircraftId);
+      const tboHours = tboByTypeId.get(r.candidate.aircraftTypeId) ?? 0;
+      if (owned && tboHours > 0) {
+        const daysSinceAnnual =
+          365 + Math.max(0, (simNow - owned.annualDueAt) / (24 * 60 * 60 * 1000));
+        const assessment = assessRisk({
+          hoursSince100hr: owned.hoursSince100hr,
+          hoursSinceAnnual: daysSinceAnnual,
+          engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
+          tboHours,
+          airframeHours: owned.airframeHours,
+        });
+        if (assessment.cannotDispatch) {
+          eligibility = {
+            eligible: false,
+            reasons: [...eligibility.reasons, "CANNOT_DISPATCH"],
+          };
+          // Match the ineligible-candidate sentinel score from rankCandidates
+          // so post-rank demotions sort below truly-eligible candidates.
+          preferenceScore = -1000;
+          cannotDispatchReason = assessment.cannotDispatchReason;
+        }
+      }
+    }
+
+    return {
+      ...r,
+      eligibility,
+      preferenceScore,
+      display,
+      fuel,
+      ...(cannotDispatchReason ? { cannotDispatchReason } : {}),
+    };
+  });
+
+  // Re-sort: post-processing may have demoted some candidates from eligible
+  // to ineligible. Without this, demoted owned aircraft keep their high
+  // pre-rank score and float above truly eligible options in the UI.
+  rankedWithDisplay.sort((a, b) => b.preferenceScore - a.preferenceScore);
 
   return { jobId, job, player, ranked: rankedWithDisplay };
 }

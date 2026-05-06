@@ -4,14 +4,24 @@ import { trpc } from "../../trpc.js";
 import { formatCash } from "../../lib/formatters.js";
 import { FleetCard } from "./FleetCard.js";
 import { HangarDrawer } from "./HangarDrawer.js";
+import { MaintenanceModal } from "./MaintenanceModal.js";
 
 export function Hangar() {
   const navigate = useNavigate();
+  type MaintenanceHighlight = "100hr" | "annual" | "overhaul";
   const [inspectId, setInspectId] = useState<number | null>(null);
+  const [maintenance, setMaintenance] = useState<
+    | { id: number; highlight?: MaintenanceHighlight }
+    | null
+  >(null);
 
   const fleetQuery = trpc.hangar.fleet.useQuery(undefined, {
     refetchInterval: 15_000,
   });
+  const careerQuery = trpc.career.get.useQuery(undefined, {
+    refetchInterval: 5_000,
+  });
+  const simNow = careerQuery.data?.simDateTime ?? Date.now();
 
   const fleet = fleetQuery.data ?? [];
   const totalEstimatedValue = fleet.reduce(
@@ -81,6 +91,10 @@ export function Hangar() {
                   key={a.id}
                   aircraft={a}
                   onInspect={() => setInspectId(a.id)}
+                  onMaintenance={(highlight) =>
+                    setMaintenance({ id: a.id, highlight })
+                  }
+                  simNow={simNow}
                   isSelected={inspectId === a.id}
                 />
               ))}
@@ -93,6 +107,14 @@ export function Hangar() {
           onClose={() => setInspectId(null)}
         />
       </div>
+
+      {maintenance != null && (
+        <MaintenanceModal
+          ownedAircraftId={maintenance.id}
+          highlightType={maintenance.highlight}
+          onClose={() => setMaintenance(null)}
+        />
+      )}
     </div>
   );
 }

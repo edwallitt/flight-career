@@ -20,6 +20,7 @@ export const aircraftTypes = sqliteTable("aircraft_types", {
   isComplex: integer("is_complex", { mode: "boolean" }).notNull(),
   cruiseSpeedKts: integer("cruise_speed_kts").notNull(),
   fuelBurnGph: real("fuel_burn_gph").notNull(),
+  fuelCapacityGal: real("fuel_capacity_gal").notNull().default(0),
   fuelType: text("fuel_type", { enum: ["avgas", "jet-a"] }).notNull(),
   mtowLbs: integer("mtow_lbs").notNull(),
   maxPayloadLbs: integer("max_payload_lbs").notNull(),
@@ -143,6 +144,10 @@ export const ownedAircraft = sqliteTable("owned_aircraft", {
   purchasedAt: integer("purchased_at").notNull(),
   purchasePrice: integer("purchase_price").notNull(),
   loanId: integer("loan_id").references((): AnySQLiteColumn => loans.id),
+  // Sim-time timestamp for the next monthly hangarage + insurance deduction.
+  // On purchase, set to purchasedAt + 30 sim days. processMonthlyOwnership
+  // walks forward 30 days at a time until the timestamp is in the future.
+  nextMonthlyCostAt: integer("next_monthly_cost_at").notNull().default(0),
 });
 
 export const loans = sqliteTable("loans", {
@@ -266,8 +271,17 @@ export const maintenanceEvents = sqliteTable("maintenance_events", {
   }).notNull(),
   cost: integer("cost").notNull(),
   startedAt: integer("started_at").notNull(),
-  completedAt: integer("completed_at").notNull(),
+  // Sim-time timestamp when the work is expected to finish. Drives the tick
+  // resolver — events flip to 'completed' the first tick simNow >= this.
+  scheduledCompletionAt: integer("scheduled_completion_at"),
+  // Null while in_progress; set to simNow when the event resolves.
+  completedAt: integer("completed_at"),
   description: text("description").notNull(),
+  status: text("status", {
+    enum: ["in_progress", "completed", "cancelled"],
+  })
+    .notNull()
+    .default("completed"),
 });
 
 export const transfers = sqliteTable("transfers", {

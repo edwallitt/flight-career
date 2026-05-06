@@ -1,6 +1,8 @@
 import {
   priceAircraft,
+  MAINTENANCE_SPECS,
   type AircraftClass,
+  type MaintenanceType,
 } from "@flightcareer/shared";
 import { and, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
@@ -9,19 +11,12 @@ import {
   airports,
   career,
   loans,
+  maintenanceEvents,
   ownedAircraft,
 } from "../db/schema.js";
 import { fuelPriceCentsPerGal } from "./jobLifecycle.js";
 
 const SIM_DAY_MS = 24 * 60 * 60 * 1000;
-
-// TODO: replace this proxy with a real `fuel_capacity_gal` column on
-// aircraft_types (and the corresponding seed values). The 4×cruise-burn
-// approximation gets close for piston singles (Cessna 152 ≈ 24 gal vs real
-// 24.5) but undershoots turbine aircraft (TBM 850 ≈ 232 gal vs real ≈ 291).
-// Owners of bigger aircraft will see refuel costs that don't match POH
-// numbers until the schema gets the proper column.
-const FUEL_CAPACITY_HOURS = 4;
 
 export interface OwnedLoanInfo {
   id: number;
@@ -33,6 +28,15 @@ export interface OwnedLoanInfo {
   termMonths: number;
   originalTermMonths: number;
   paymentsMade: number;
+}
+
+export interface InProgressMaintenanceSummary {
+  type: MaintenanceType | "unscheduled";
+  label: string;
+  description: string;
+  startedAt: number;
+  scheduledCompletionAt: number;
+  cost: number;
 }
 
 export interface OwnedAircraftDetail {
@@ -80,10 +84,8 @@ export interface OwnedAircraftDetail {
   estimatedValueCents: number;
   loanLtvRatio: number | null;
   monthlyFixedCostsCents: number;
-}
-
-function computeFuelCapacity(fuelBurnGph: number): number {
-  return Math.round(fuelBurnGph * FUEL_CAPACITY_HOURS);
+  inProgressMaintenance: InProgressMaintenanceSummary | null;
+  nextMonthlyCostAt: number;
 }
 
 function buildDetail(
@@ -91,6 +93,7 @@ function buildDetail(
   type: typeof aircraftTypes.$inferSelect,
   airport: typeof airports.$inferSelect,
   loanRow: typeof loans.$inferSelect | null,
+  inProgress: typeof maintenanceEvents.$inferSelect | null,
   simNow: number,
 ): OwnedAircraftDetail {
   const engineRemaining = Math.max(
@@ -185,10 +188,25 @@ function buildDetail(
     engineRemainingHours: engineRemaining,
     hundredHourRemainingHours: hundredHourRemaining,
     annualDaysRemaining,
-    fuelCapacityGal: computeFuelCapacity(type.fuelBurnGph),
+    fuelCapacityGal: type.fuelCapacityGal,
     estimatedValueCents,
     loanLtvRatio,
     monthlyFixedCostsCents,
+    inProgressMaintenance: inProgress
+      ? {
+          type: inProgress.type as MaintenanceType | "unscheduled",
+          label:
+            inProgress.type === "unscheduled"
+              ? "Unscheduled repair"
+              : (MAINTENANCE_SPECS[inProgress.type as MaintenanceType]?.label ??
+                inProgress.type),
+          description: inProgress.description,
+          startedAt: inProgress.startedAt,
+          scheduledCompletionAt: inProgress.scheduledCompletionAt ?? 0,
+          cost: inProgress.cost,
+        }
+      : null,
+    nextMonthlyCostAt: owned.nextMonthlyCostAt,
   };
 }
 
@@ -213,8 +231,28 @@ export function getOwnedAircraft(): OwnedAircraftDetail[] {
     loansByAircraftId.set(l.ownedAircraftId, l);
   }
 
+  const inProgressRows = db
+    .select()
+    .from(maintenanceEvents)
+    .where(eq(maintenanceEvents.status, "in_progress"))
+    .all();
+  const inProgressByAircraftId = new Map<
+    number,
+    typeof maintenanceEvents.$inferSelect
+  >();
+  for (const ev of inProgressRows) {
+    inProgressByAircraftId.set(ev.ownedAircraftId, ev);
+  }
+
   const details = rows.map(({ owned, type, ap }) =>
-    buildDetail(owned, type, ap, loansByAircraftId.get(owned.id) ?? null, simNow),
+    buildDetail(
+      owned,
+      type,
+      ap,
+      loansByAircraftId.get(owned.id) ?? null,
+      inProgressByAircraftId.get(owned.id) ?? null,
+      simNow,
+    ),
   );
   details.sort((a, b) => b.purchasedAt - a.purchasedAt);
   return details;
@@ -238,7 +276,19 @@ export function getOwnedAircraftById(id: number): OwnedAircraftDetail | null {
       .where(eq(loans.ownedAircraftId, id))
       .get() ?? null;
 
-  return buildDetail(row.owned, row.type, row.ap, loanRow, simNow);
+  const inProgressRow =
+    db
+      .select()
+      .from(maintenanceEvents)
+      .where(
+        and(
+          eq(maintenanceEvents.ownedAircraftId, id),
+          eq(maintenanceEvents.status, "in_progress"),
+        ),
+      )
+      .get() ?? null;
+
+  return buildDetail(row.owned, row.type, row.ap, loanRow, inProgressRow, simNow);
 }
 
 export interface RefuelResult {
@@ -292,7 +342,7 @@ export function refuelOwnedAircraft(aircraftId: number): RefuelOutcome {
       };
     }
 
-    const capacity = computeFuelCapacity(type.fuelBurnGph);
+    const capacity = type.fuelCapacityGal;
     const needed = Math.max(0, capacity - owned.fuelOnBoardGal);
     if (needed <= 0) {
       return { ok: false, error: "Tanks are already full" };

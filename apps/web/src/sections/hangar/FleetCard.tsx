@@ -1,11 +1,23 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@flightcareer/server/router";
+import { assessRisk, RISK_TIER_LABEL, type RiskTier } from "@flightcareer/shared";
 import { trpc } from "../../trpc.js";
 import { formatCash } from "../../lib/formatters.js";
 import {
   ENGINE_TONE_CLASS,
   getEngineHealthTone,
 } from "../../lib/engineHealth.js";
+
+const SIM_DAY_MS = 24 * 60 * 60 * 1000;
+
+const RISK_CHIP_TONE: Record<RiskTier, string> = {
+  healthy: "border-emerald-500/40 bg-emerald-500/[0.08] text-emerald-300",
+  monitor: "border-amber-deep/60 bg-amber-glow/[0.08] text-amber-warm",
+  elevated: "border-urgency-urgent/60 bg-urgency-urgent/[0.10] text-urgency-urgent",
+  high: "border-urgency-critical/60 bg-urgency-critical/[0.10] text-urgency-critical",
+  critical:
+    "border-urgency-critical bg-urgency-critical/[0.16] text-urgency-critical font-semibold",
+};
 
 type FleetItem = inferRouterOutputs<AppRouter>["hangar"]["fleet"][number];
 
@@ -91,13 +103,19 @@ function StatRow({
   );
 }
 
+type MaintenanceHighlight = "100hr" | "annual" | "overhaul";
+
 export function FleetCard({
   aircraft,
   onInspect,
+  onMaintenance,
+  simNow,
   isSelected,
 }: {
   aircraft: FleetItem;
   onInspect: () => void;
+  onMaintenance: (highlight?: MaintenanceHighlight) => void;
+  simNow: number;
   isSelected: boolean;
 }) {
   const utils = trpc.useUtils();
@@ -108,6 +126,29 @@ export function FleetCard({
       utils.career.get.invalidate();
     },
   });
+
+  const inMaintenance = aircraft.status === "in_maintenance";
+  const inProgress = aircraft.inProgressMaintenance;
+
+  const daysSinceAnnual =
+    365 + Math.max(0, (simNow - aircraft.annualDueAt) / SIM_DAY_MS);
+  const risk = assessRisk({
+    hoursSince100hr: aircraft.hoursSince100hr,
+    hoursSinceAnnual: daysSinceAnnual,
+    engineHoursSinceOverhaul: aircraft.engineHoursSinceOverhaul,
+    tboHours: aircraft.tboHours,
+    airframeHours: aircraft.airframeHours,
+  });
+
+  // Pick a maintenance type to spotlight when the player clicks the chip.
+  // Engine wear is the most expensive to ignore, so it wins ties.
+  function highlightFromRisk(): MaintenanceHighlight | undefined {
+    const kinds = new Set(risk.factors.map((f) => f.factor));
+    if (kinds.has("engine_tbo_ratio")) return "overhaul";
+    if (kinds.has("days_since_annual")) return "annual";
+    if (kinds.has("hours_since_100hr")) return "100hr";
+    return undefined;
+  }
 
   // Bar fill values are all "remaining capacity" fractions.
   const engineRemainingValue =
@@ -150,6 +191,22 @@ export function FleetCard({
         ? "Tanks full"
         : null;
 
+  const maintenanceDisabledReason =
+    aircraft.status === "in_flight"
+      ? "In flight"
+      : aircraft.status === "committed"
+        ? "Committed to a job"
+        : null;
+  const canBookMaintenance = !maintenanceDisabledReason;
+
+  const maintenanceRemainingDays =
+    inProgress && inProgress.scheduledCompletionAt > 0
+      ? Math.max(
+          0,
+          Math.ceil((inProgress.scheduledCompletionAt - simNow) / SIM_DAY_MS),
+        )
+      : 0;
+
   return (
     <div
       className={[
@@ -182,14 +239,33 @@ export function FleetCard({
             </span>
           </div>
         </div>
-        <span
-          className={[
-            "rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign",
-            STATUS_TONE[aircraft.status],
-          ].join(" ")}
-        >
-          {STATUS_LABEL[aircraft.status]}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onMaintenance(highlightFromRisk())}
+            disabled={!canBookMaintenance}
+            title={
+              risk.factors.length > 0
+                ? risk.factors.map((f) => f.description).join("; ")
+                : "Maintenance details"
+            }
+            className={[
+              "rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign transition-colors",
+              RISK_CHIP_TONE[risk.tier],
+              canBookMaintenance ? "cursor-pointer hover:brightness-125" : "cursor-not-allowed opacity-70",
+            ].join(" ")}
+          >
+            {RISK_TIER_LABEL[risk.tier]}
+          </button>
+          <span
+            className={[
+              "rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign",
+              STATUS_TONE[aircraft.status],
+            ].join(" ")}
+          >
+            {STATUS_LABEL[aircraft.status]}
+          </span>
+        </div>
       </div>
 
       {/* Location */}
@@ -202,6 +278,22 @@ export function FleetCard({
         </span>
         <span className="text-tiny text-muted">{aircraft.locationName}</span>
       </div>
+
+      {inMaintenance && inProgress && (
+        <div className="border-b border-urgency-critical/40 bg-urgency-critical/[0.06] px-5 py-2.5">
+          <div className="font-mono text-[10px] uppercase tracking-callsign text-urgency-critical">
+            In maintenance · {inProgress.label}
+          </div>
+          <div className="mt-1 font-mono text-[11px] tabular-nums text-muted">
+            Completes in {maintenanceRemainingDays} sim day
+            {maintenanceRemainingDays === 1 ? "" : "s"} ·{" "}
+            <span className="text-text-high">
+              {formatCash(inProgress.cost)}
+            </span>{" "}
+            paid
+          </div>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="px-5 py-3">
@@ -334,6 +426,15 @@ export function FleetCard({
           className="flex-1 rounded-sm border border-ink-600 bg-ink-750 py-2 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-amber-deep hover:text-text-high"
         >
           Inspect
+        </button>
+        <button
+          type="button"
+          onClick={() => onMaintenance()}
+          disabled={!canBookMaintenance}
+          title={maintenanceDisabledReason ?? undefined}
+          className="flex-1 rounded-sm border border-ink-600 bg-ink-750 py-2 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-amber-deep hover:text-text-high disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {inMaintenance ? "Maintenance · In progress" : "Maintenance"}
         </button>
       </div>
       {refuelMutation.data && !refuelMutation.data.ok && (

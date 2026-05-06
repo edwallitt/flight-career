@@ -1,6 +1,119 @@
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { formatCash } from "../../lib/formatters.js";
+import { type RiskTier } from "@flightcareer/shared";
+
+type RiskInfo = {
+  tier: RiskTier;
+  factors: Array<{ description: string; severity: string }>;
+  cannotDispatch: boolean;
+  cannotDispatchReason: string | null;
+};
+
+const RISK_TONE: Record<
+  RiskTier,
+  { label: string; tone: string; icon: string; bold: boolean }
+> = {
+  healthy: {
+    label: "Aircraft healthy",
+    tone: "text-amber-glow",
+    icon: "✓",
+    bold: false,
+  },
+  monitor: {
+    label: "Monitor maintenance",
+    tone: "text-amber-warm",
+    icon: "⚠",
+    bold: false,
+  },
+  elevated: {
+    label: "Elevated risk",
+    tone: "text-urgency-urgent",
+    icon: "⚠",
+    bold: false,
+  },
+  high: {
+    label: "High risk",
+    tone: "text-urgency-critical",
+    icon: "⚠",
+    bold: false,
+  },
+  critical: {
+    label: "Critical risk",
+    tone: "text-urgency-critical",
+    icon: "⚠",
+    bold: true,
+  },
+};
+
+function AircraftStatusPanel({
+  source,
+  risk,
+}: {
+  source: "owned" | "rental";
+  risk: RiskInfo | null;
+}) {
+  if (source === "rental") {
+    return (
+      <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+        <div className="flex items-center gap-2">
+          <span className="label">Aircraft status</span>
+          <span className="h-px flex-1 bg-ink-600" />
+        </div>
+        <div className="mt-2 font-mono text-[12px] text-amber-glow">
+          ✓ Rental — no maintenance risk to you
+        </div>
+      </div>
+    );
+  }
+
+  if (!risk) return null;
+
+  if (risk.cannotDispatch) {
+    return (
+      <div className="rounded-sm border border-urgency-critical/70 bg-urgency-critical/[0.10] p-4">
+        <div className="flex items-center gap-2">
+          <span className="label text-urgency-critical">Aircraft status</span>
+          <span className="h-px flex-1 bg-urgency-critical/40" />
+        </div>
+        <div className="mt-2 font-mono text-[12px] font-semibold text-urgency-critical">
+          ✗ Cannot dispatch
+        </div>
+        {risk.cannotDispatchReason && (
+          <div className="mt-1 font-mono text-tiny text-urgency-critical/80">
+            {risk.cannotDispatchReason}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const cfg = RISK_TONE[risk.tier];
+  const factorSummary = risk.factors.map((f) => f.description).join("; ");
+
+  return (
+    <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+      <div className="flex items-center gap-2">
+        <span className="label">Aircraft status</span>
+        <span className="h-px flex-1 bg-ink-600" />
+      </div>
+      <div
+        className={[
+          "mt-2 font-mono text-[12px]",
+          cfg.tone,
+          cfg.bold ? "font-semibold" : "",
+        ].join(" ")}
+      >
+        {cfg.icon} {cfg.label}
+      </div>
+      {factorSummary && (
+        <div className="mt-1 font-mono text-tiny text-muted">
+          {factorSummary}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function useEscape(onClose: () => void): void {
   useEffect(() => {
@@ -35,6 +148,313 @@ function ChecklistRow({ label, met }: { label: string; met: boolean }) {
         {met ? "✓ go" : "✗ fail"}
       </span>
     </li>
+  );
+}
+
+function fmtGal(gal: number): string {
+  return Math.round(gal).toLocaleString("en-US");
+}
+
+function fmtNm(nm: number): string {
+  return Math.round(nm).toLocaleString("en-US");
+}
+
+function FuelBar({
+  ratio,
+  tone,
+}: {
+  ratio: number;
+  tone: "ok" | "warn" | "bad";
+}) {
+  const pct = Math.max(0, Math.min(1, ratio)) * 100;
+  const colorClass =
+    tone === "bad"
+      ? "bg-urgency-critical"
+      : tone === "warn"
+        ? "bg-amber-warm"
+        : "bg-amber-glow";
+  return (
+    <div className="h-1.5 w-full rounded-sm bg-ink-700">
+      <div
+        className={`h-full rounded-sm ${colorClass} transition-[width]`}
+        style={{ width: `${pct}%` }}
+      />
+    </div>
+  );
+}
+
+function RentalFuelPanel({
+  rangeNm,
+  cruiseSpeedKts,
+  tripDistanceNm,
+}: {
+  rangeNm: number;
+  cruiseSpeedKts: number;
+  tripDistanceNm: number;
+}) {
+  const tripHours = cruiseSpeedKts > 0 ? tripDistanceNm / cruiseSpeedKts : 0;
+  return (
+    <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
+      <div className="flex items-center gap-2">
+        <span className="label text-amber-glow/80">Fuel</span>
+        <span className="h-px flex-1 bg-amber-deep/40" />
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+          included
+        </span>
+      </div>
+      <div className="mt-3 font-mono text-[12px] text-text-high">
+        Wet rental — fuel included in hourly rate
+      </div>
+      <div className="mt-1 font-mono text-tiny text-muted">
+        Aircraft will be fueled and ready at departure.
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-amber-deep/30 pt-3 font-mono text-tiny text-muted-dim">
+        <div className="flex flex-col">
+          <span className="label">Spec range</span>
+          <span className="mt-0.5 tabular-nums text-text">~{fmtNm(rangeNm)} nm</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="label">Trip block</span>
+          <span className="mt-0.5 tabular-nums text-text">
+            ~{tripHours.toFixed(1)} hrs · {fmtNm(tripDistanceNm)} nm
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OwnedFuelPanel(props: {
+  currentFuelGal: number;
+  capacityGal: number;
+  tripDistanceNm: number;
+  originIcao: string;
+  fuelType: "avgas" | "jet-a";
+  pricePerGal: number;
+  recommendedUpliftGal: number;
+  fuelInput: string;
+  onFuelInputChange: (v: string) => void;
+  upliftGal: number;
+  fuelValid: boolean;
+  headroomGal: number;
+  totalFuelGal: number;
+  operationalRangeNm: number;
+  reservesAtDestNm: number;
+  reservesAtDestMin: number;
+  fuelCost: number;
+  fuelInsufficient: boolean;
+  tripUtilization: number;
+}) {
+  const {
+    currentFuelGal,
+    capacityGal,
+    tripDistanceNm,
+    originIcao,
+    fuelType,
+    pricePerGal,
+    recommendedUpliftGal,
+    fuelInput,
+    onFuelInputChange,
+    upliftGal,
+    fuelValid,
+    headroomGal,
+    totalFuelGal,
+    operationalRangeNm,
+    reservesAtDestNm,
+    reservesAtDestMin,
+    fuelCost,
+    fuelInsufficient,
+    tripUtilization,
+  } = props;
+
+  const [expanded, setExpanded] = useState(recommendedUpliftGal > 0);
+  // Bar tone for the projected total. Below 10% = bad, 10-30% = warn.
+  const totalRatio = capacityGal > 0 ? totalFuelGal / capacityGal : 0;
+  const tone: "ok" | "warn" | "bad" = fuelInsufficient
+    ? "bad"
+    : totalRatio < 0.1
+      ? "bad"
+      : totalRatio < 0.3
+        ? "warn"
+        : "ok";
+  const currentRatio = capacityGal > 0 ? currentFuelGal / capacityGal : 0;
+  const sufficientWithoutUplift = recommendedUpliftGal === 0;
+  const overCapacity = upliftGal > headroomGal + 1e-6;
+  const showCompact = sufficientWithoutUplift && !expanded;
+
+  // Compact form: aircraft is already fueled enough for the trip.
+  if (showCompact) {
+    return (
+      <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
+        <div className="flex items-center gap-2">
+          <span className="label text-amber-glow/80">Fuel</span>
+          <span className="h-px flex-1 bg-amber-deep/40" />
+          <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+            ready
+          </span>
+        </div>
+        <div className="mt-3 font-mono text-[12px] text-text-high">
+          Already fueled for this flight: {fmtGal(currentFuelGal)} / {fmtGal(capacityGal)} gal
+        </div>
+        <div className="mt-2">
+          <FuelBar ratio={currentRatio} tone={tone} />
+        </div>
+        <div className="mt-3 font-mono text-tiny text-muted">
+          Estimated range ~{fmtNm(operationalRangeNm)} nm — comfortable for {fmtNm(tripDistanceNm)} nm trip.
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="mt-3 font-mono text-[10px] uppercase tracking-callsign text-amber-deep hover:text-amber-glow"
+        >
+          + Optional: top up to full
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
+      <div className="flex items-center gap-2">
+        <span className="label text-amber-glow/80">Fuel uplift</span>
+        <span className="h-px flex-1 bg-amber-deep/40" />
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+          {recommendedUpliftGal > 0
+            ? `reco ${fmtGal(recommendedUpliftGal)} gal`
+            : "uplift optional"}
+        </span>
+      </div>
+
+      {/* Current fuel + capacity */}
+      <div className="mt-3 grid grid-cols-2 gap-3 font-mono text-tiny">
+        <div className="flex justify-between">
+          <span className="text-muted">Current fuel</span>
+          <span className="tabular-nums text-text">{fmtGal(currentFuelGal)} gal</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Max capacity</span>
+          <span className="tabular-nums text-text">{fmtGal(capacityGal)} gal</span>
+        </div>
+      </div>
+      <div className="mt-2">
+        <FuelBar ratio={currentRatio} tone="ok" />
+        <div className="mt-1 text-right font-mono text-micro text-muted-dim">
+          {Math.round(currentRatio * 100)}%
+        </div>
+      </div>
+
+      {sufficientWithoutUplift && (
+        <div className="mt-3 font-mono text-tiny text-muted">
+          Sufficient fuel on board; uplift optional.
+        </div>
+      )}
+
+      {/* Uplift input */}
+      <div className="mt-4 flex items-baseline gap-3">
+        <span className="font-mono text-tiny uppercase tracking-callsign text-muted">
+          Uplift
+        </span>
+        <input
+          type="number"
+          inputMode="decimal"
+          min={0}
+          max={Math.floor(headroomGal)}
+          step={1}
+          value={fuelInput}
+          onChange={(e) => onFuelInputChange(e.target.value)}
+          aria-invalid={!fuelValid || overCapacity}
+          className={[
+            "w-32 rounded-sm border bg-ink-800 px-3 py-2 text-right font-mono text-[20px] tabular-nums text-text-high outline-none focus:border-amber-glow",
+            !fuelValid || overCapacity
+              ? "border-urgency-critical/70"
+              : "border-ink-600",
+          ].join(" ")}
+        />
+        <span className="font-mono text-tiny uppercase tracking-callsign text-muted-dim">
+          gallons
+        </span>
+        <span className="ml-auto font-mono text-tiny text-muted-dim">
+          × {formatCash(pricePerGal)} / gal
+        </span>
+      </div>
+
+      {overCapacity && (
+        <div className="mt-1 font-mono text-micro text-urgency-urgent">
+          Exceeds tank headroom ({fmtGal(headroomGal)} gal max)
+        </div>
+      )}
+
+      {/* After uplift */}
+      <div className="mt-4 flex items-center justify-between font-mono text-tiny">
+        <span className="text-muted">After uplift</span>
+        <span className="tabular-nums text-text-high">
+          {fmtGal(totalFuelGal)} / {fmtGal(capacityGal)} gal
+        </span>
+      </div>
+      <div className="mt-2">
+        <FuelBar ratio={totalRatio} tone={tone} />
+        <div className="mt-1 text-right font-mono text-micro text-muted-dim">
+          {Math.round(totalRatio * 100)}%
+        </div>
+      </div>
+
+      {/* Range / reserves */}
+      <div className="mt-4 grid grid-cols-1 gap-1.5 border-t border-amber-deep/30 pt-3 font-mono text-tiny">
+        <div className="flex justify-between">
+          <span className="text-muted">Estimated range</span>
+          <span className="tabular-nums text-text">
+            ~{fmtNm(operationalRangeNm)} nm
+            <span className="text-muted-dim"> · +45m reserve</span>
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Trip distance</span>
+          <span className="tabular-nums text-text">
+            {fmtNm(tripDistanceNm)} nm
+            <span className="text-muted-dim">
+              {" "}
+              ({Math.round(tripUtilization * 100)}% used)
+            </span>
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-muted">Reserve at dest</span>
+          <span
+            className={[
+              "tabular-nums",
+              fuelInsufficient ? "text-urgency-critical" : "text-text",
+            ].join(" ")}
+          >
+            ~{fmtNm(reservesAtDestNm)} nm
+            <span className="text-muted-dim">
+              {" "}
+              ({Math.round(reservesAtDestMin)} min)
+            </span>
+          </span>
+        </div>
+      </div>
+
+      {fuelInsufficient && (
+        <div className="mt-3 rounded-sm border border-urgency-critical/60 bg-urgency-critical/[0.07] p-2 font-mono text-tiny text-urgency-critical">
+          ✗ INSUFFICIENT FUEL — operational range short of trip distance.
+        </div>
+      )}
+
+      {/* Fuel cost line, prominent per-gal price */}
+      <div className="mt-4 flex items-center justify-between border-t border-amber-deep/30 pt-3">
+        <div className="flex flex-col">
+          <span className="font-mono text-tiny uppercase tracking-callsign text-muted">
+            Fuel cost
+          </span>
+          <span className="mt-0.5 font-mono text-micro text-muted-dim">
+            {formatCash(pricePerGal)}/gal {fuelType.toUpperCase()} @ {originIcao}
+          </span>
+        </div>
+        <span className="font-mono text-[18px] tabular-nums text-amber-warm">
+          {formatCash(fuelCost)}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -73,10 +493,11 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
   useBodyScrollLock();
   useEscape(onClose);
 
-  // Seed the input from the server recommendation once.
+  // Seed the input from the server's uplift recommendation once. Owned only —
+  // rentals skip the uplift step entirely.
   useEffect(() => {
-    if (!seededRef.current && active.data) {
-      setFuelInput(String(active.data.recommendedFuelGallons));
+    if (!seededRef.current && active.data && active.data.aircraft.source === "owned") {
+      setFuelInput(String(active.data.recommendedFuelUpliftGallons));
       seededRef.current = true;
     }
   }, [active.data]);
@@ -88,17 +509,39 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
 
   const j = data.job;
   const a = data.aircraft;
+  const isRental = a.source === "rental";
 
   const parsedFuel = Number(fuelInput);
-  const fuelValid = Number.isFinite(parsedFuel) && parsedFuel > 0;
-  const fuel = fuelValid ? parsedFuel : 0;
-  const fuelCost = fuelValid ? Math.round(fuel * data.fuelPriceCentsPerGal) : 0;
+  const fuelValid = isRental
+    ? true
+    : Number.isFinite(parsedFuel) && parsedFuel >= 0;
+  const headroomGal = Math.max(0, a.fuelCapacityGal - a.currentFuelGal);
+  const upliftGal = isRental
+    ? 0
+    : Math.max(0, Math.min(headroomGal, fuelValid ? parsedFuel : 0));
+  const fuelCost = isRental
+    ? 0
+    : Math.round(upliftGal * data.fuelPriceCentsPerGal);
   const cash = career.data?.cash ?? 0;
   const projectedCash = cash - fuelCost;
   const sufficient = projectedCash >= 0;
   const ratedOk = true; // accept already enforced this; informational only
   const atOrigin = a.currentLocationIcao === j.originIcao;
   const within = a.maxPayloadLbs >= j.payloadLbs;
+
+  // Operational projections. Rental: assume full tanks (server reports
+  // currentFuelGal = capacity for rentals).
+  const totalFuelGal = isRental ? a.fuelCapacityGal : a.currentFuelGal + upliftGal;
+  const reserveGal = 0.75 * a.fuelBurnGph;
+  const usableGal = Math.max(0, totalFuelGal - reserveGal);
+  const operationalRangeNm =
+    a.fuelBurnGph > 0 ? (usableGal / a.fuelBurnGph) * a.cruiseSpeedKts : 0;
+  const reservesAtDestNm = Math.max(0, operationalRangeNm - j.distanceNm);
+  const reservesAtDestMin =
+    a.cruiseSpeedKts > 0 ? (reservesAtDestNm / a.cruiseSpeedKts) * 60 : 0;
+  const fuelInsufficient = !isRental && operationalRangeNm < j.distanceNm;
+  const tripUtilization =
+    operationalRangeNm > 0 ? Math.min(1, j.distanceNm / operationalRangeNm) : 0;
 
   const errorMsg =
     briefMutation.data && !briefMutation.data.ok
@@ -232,76 +675,67 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
               </div>
             </div>
 
-            <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
-              <div className="flex items-center gap-2">
-                <span className="label text-amber-glow/80">Fuel uplift</span>
-                <span className="h-px flex-1 bg-amber-deep/40" />
-                <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
-                  reco {data.recommendedFuelGallons} gal
-                </span>
-              </div>
+            {isRental ? (
+              <RentalFuelPanel
+                rangeNm={a.rangeNm}
+                cruiseSpeedKts={a.cruiseSpeedKts}
+                tripDistanceNm={j.distanceNm}
+              />
+            ) : (
+              <OwnedFuelPanel
+                currentFuelGal={a.currentFuelGal}
+                capacityGal={a.fuelCapacityGal}
+                tripDistanceNm={j.distanceNm}
+                originIcao={j.originIcao}
+                fuelType={a.fuelType}
+                pricePerGal={data.fuelPriceCentsPerGal}
+                recommendedUpliftGal={data.recommendedFuelUpliftGallons}
+                fuelInput={fuelInput}
+                onFuelInputChange={setFuelInput}
+                upliftGal={upliftGal}
+                fuelValid={fuelValid}
+                headroomGal={headroomGal}
+                totalFuelGal={totalFuelGal}
+                operationalRangeNm={operationalRangeNm}
+                reservesAtDestNm={reservesAtDestNm}
+                reservesAtDestMin={reservesAtDestMin}
+                fuelCost={fuelCost}
+                fuelInsufficient={fuelInsufficient}
+                tripUtilization={tripUtilization}
+              />
+            )}
 
-              <div className="mt-3 flex items-baseline gap-3">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min={1}
-                  step={1}
-                  value={fuelInput}
-                  onChange={(e) => setFuelInput(e.target.value)}
-                  aria-invalid={!fuelValid}
-                  className={[
-                    "w-32 rounded-sm border bg-ink-800 px-3 py-2 text-right font-mono text-[20px] tabular-nums text-text-high outline-none focus:border-amber-glow",
-                    fuelValid ? "border-ink-600" : "border-urgency-critical/70",
-                  ].join(" ")}
-                />
-                <span className="font-mono text-tiny uppercase tracking-callsign text-muted-dim">
-                  gallons
-                </span>
-                <span className="ml-auto font-mono text-tiny text-muted-dim">
-                  × {formatCash(data.fuelPriceCentsPerGal)} / gal
-                </span>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between border-t border-amber-deep/30 pt-3">
-                <span className="font-mono text-tiny uppercase tracking-callsign text-muted">
-                  Fuel cost
-                </span>
-                <span className="font-mono text-[18px] tabular-nums text-amber-warm">
-                  {formatCash(fuelCost)}
-                </span>
-              </div>
-            </div>
-
-            <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
-              <div className="flex items-center gap-2">
-                <span className="label">Cash impact</span>
-                <span className="h-px flex-1 bg-ink-600" />
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-3 font-mono text-text">
-                <div className="flex flex-col">
-                  <span className="label">Now</span>
-                  <span className="mt-0.5 tabular-nums">{formatCash(cash)}</span>
+            {!isRental && (
+              <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+                <div className="flex items-center gap-2">
+                  <span className="label">Cash impact</span>
+                  <span className="h-px flex-1 bg-ink-600" />
                 </div>
-                <div className="flex flex-col">
-                  <span className="label">Fuel</span>
-                  <span className="mt-0.5 tabular-nums text-urgency-urgent">
-                    − {formatCash(fuelCost)}
-                  </span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="label">After</span>
-                  <span
-                    className={[
-                      "mt-0.5 tabular-nums",
-                      sufficient ? "text-text-high" : "text-urgency-critical",
-                    ].join(" ")}
-                  >
-                    {formatCash(projectedCash)}
-                  </span>
+                <div className="mt-3 grid grid-cols-3 gap-3 font-mono text-text">
+                  <div className="flex flex-col">
+                    <span className="label">Now</span>
+                    <span className="mt-0.5 tabular-nums">{formatCash(cash)}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="label">Fuel</span>
+                    <span className="mt-0.5 tabular-nums text-urgency-urgent">
+                      − {formatCash(fuelCost)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="label">After</span>
+                    <span
+                      className={[
+                        "mt-0.5 tabular-nums",
+                        sufficient ? "text-text-high" : "text-urgency-critical",
+                      ].join(" ")}
+                    >
+                      {formatCash(projectedCash)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* Right: checklist */}
@@ -322,10 +756,22 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
               </ul>
             </div>
 
+            <AircraftStatusPanel source={a.source} risk={data.risk} />
+
             <div className="rounded-sm border border-ink-600 bg-ink-750 p-4 text-tiny leading-relaxed text-muted">
-              Once you confirm, fuel cost is deducted and the flight is locked
-              in as <span className="text-amber-glow">briefed</span>. Cancelling
-              after this point won't refund the fuel.
+              {isRental ? (
+                <>
+                  Once you confirm, the rental is locked in as{" "}
+                  <span className="text-amber-glow">briefed</span>. Hourly cost
+                  is billed when the flight completes.
+                </>
+              ) : (
+                <>
+                  Once you confirm, fuel cost is deducted and the flight is
+                  locked in as <span className="text-amber-glow">briefed</span>.
+                  Cancelling after this point won't refund the fuel.
+                </>
+              )}
             </div>
 
             {errorMsg && (
@@ -347,13 +793,21 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
           </button>
           <button
             type="button"
-            disabled={!sufficient || !fuelValid || briefMutation.isPending}
-            onClick={() => briefMutation.mutate({ fuelGallons: fuel })}
+            disabled={
+              !sufficient ||
+              !fuelValid ||
+              fuelInsufficient ||
+              briefMutation.isPending ||
+              (data.risk?.cannotDispatch ?? false)
+            }
+            onClick={() => briefMutation.mutate({ fuelGallons: upliftGal })}
             className="group relative rounded-sm border border-amber-glow bg-amber-glow/[0.14] px-6 py-2.5 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.22] disabled:opacity-40"
           >
             {briefMutation.isPending
               ? "Confirming…"
-              : `Confirm brief & pay ${formatCash(fuelCost)}`}
+              : isRental
+                ? "Confirm brief"
+                : `Confirm brief & pay ${formatCash(fuelCost)}`}
             <span className="ml-2 text-amber-deep">▸</span>
           </button>
         </div>

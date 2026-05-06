@@ -92,8 +92,10 @@ export interface MaintenanceLogRow {
   type: "100hr" | "annual" | "overhaul" | "unscheduled";
   cost: number;
   startedAt: number;
-  completedAt: number;
+  scheduledCompletionAt: number | null;
+  completedAt: number | null;
   description: string;
+  status: "in_progress" | "completed" | "cancelled";
 }
 
 // ---------------------------------------------------------------------------
@@ -279,13 +281,16 @@ export function getFinancialSummary(input?: {
     )
     .all();
 
+  // Cost is captured at booking time (status flips in_progress → completed
+  // at the scheduled time, but cash already moved). We key off startedAt so
+  // in-progress events show up in the spend tally immediately.
   const maintenanceRows = db
     .select()
     .from(maintenanceEvents)
     .where(
       and(
-        gte(maintenanceEvents.completedAt, from),
-        lte(maintenanceEvents.completedAt, to),
+        gte(maintenanceEvents.startedAt, from),
+        lte(maintenanceEvents.startedAt, to),
       ),
     )
     .all();
@@ -330,6 +335,7 @@ export function getFinancialSummary(input?: {
 
   let maintenanceCosts = 0;
   for (const m of maintenanceRows) {
+    if (m.status === "cancelled") continue;
     maintenanceCosts += m.cost;
   }
 
@@ -408,8 +414,10 @@ export function getMaintenanceEvents(): MaintenanceLogRow[] {
     type: ev.type,
     cost: ev.cost,
     startedAt: ev.startedAt,
+    scheduledCompletionAt: ev.scheduledCompletionAt,
     completedAt: ev.completedAt,
     description: ev.description,
+    status: ev.status,
   }));
 }
 

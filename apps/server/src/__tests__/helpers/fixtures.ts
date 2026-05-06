@@ -212,7 +212,9 @@ export function insertOwnedAircraft(
       hoursSince100hr: input.hoursSince100hr ?? 50,
       hoursSinceAnnual: input.hoursSinceAnnual ?? 100,
       annualDueAt: input.annualDueAt ?? now + 180 * 24 * 60 * 60 * 1000,
-      fuelOnBoardGal: input.fuelOnBoardGal ?? 70,
+      // Default well below typical capacities so a briefJob({fuelGallons:30})
+      // uplift fits in tank headroom without specifying per-test.
+      fuelOnBoardGal: input.fuelOnBoardGal ?? 20,
       status: input.status ?? "available",
       purchasedAt: now - 30 * 24 * 60 * 60 * 1000,
       purchasePrice: 500_000_00,

@@ -78,6 +78,20 @@
       "when": 1778061382782,
       "tag": "0010_lyrical_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1778084097577,
+      "tag": "0011_boring_justin_hammer",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1778097699083,
+      "tag": "0012_curved_archangel",
+      "breakpoints": true
     }
   ]
 }

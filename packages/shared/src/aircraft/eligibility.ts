@@ -10,7 +10,8 @@ export type EligibilityReason =
   | "WRONG_LOCATION"
   | "AIRCRAFT_UNAVAILABLE"
   | "RUNWAY_TOO_SHORT"
-  | "CAPABILITY_MISSING";
+  | "CAPABILITY_MISSING"
+  | "CANNOT_DISPATCH";
 
 export interface EligibilityResult {
   eligible: boolean;

@@ -144,6 +144,13 @@ export function InFlightSurface() {
         void utils.career.get.invalidate();
         void utils.jobs.list.invalidate();
         void utils.aircraft.candidatesForJob.invalidate();
+        // Owned-aircraft state may change at completion (hours, fuel,
+        // unscheduled maintenance grounding) — refresh the hangar surfaces.
+        void utils.hangar.fleet.invalidate();
+        void utils.hangar.aircraftById.invalidate();
+        void utils.maintenance.options.invalidate();
+        void utils.logbook.maintenance.invalidate();
+        void utils.logbook.flights.invalidate();
       }
     },
   });

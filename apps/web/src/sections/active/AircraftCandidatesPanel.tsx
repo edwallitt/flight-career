@@ -43,13 +43,71 @@ function selectionFromCandidate(c: RankedCandidate): AircraftSelection | null {
   return null;
 }
 
-function ReasonChips({ reasons }: { reasons: string[] }) {
+function FuelLine({ fuel }: { fuel: RankedCandidate["fuel"] }) {
+  if (fuel.source === "rental") {
+    return (
+      <div className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+        FUEL · wet rental, fueled at start
+      </div>
+    );
+  }
+  const cap = fuel.fuelCapacityGal;
+  const cur = fuel.currentFuelGal;
+  const pct = cap > 0 ? Math.max(0, Math.min(1, cur / cap)) : 0;
+  const tone =
+    fuel.status === "insufficient"
+      ? "text-urgency-critical"
+      : fuel.status === "top_up"
+        ? "text-amber-warm"
+        : "text-amber-glow/80";
+  const barTone =
+    fuel.status === "insufficient"
+      ? "bg-urgency-critical"
+      : fuel.status === "top_up"
+        ? "bg-amber-warm"
+        : "bg-amber-glow";
+  const hint =
+    fuel.status === "insufficient"
+      ? "✗ Insufficient fuel"
+      : fuel.status === "top_up"
+        ? "⚠ Top up needed"
+        : "✓ Fueled";
+  return (
+    <div className="flex items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+      <div className="flex items-center gap-2">
+        <span>FUEL ·</span>
+        <span className="tabular-nums text-muted">
+          {Math.round(cur)}/{Math.round(cap)} gal
+        </span>
+        <span className="h-1 w-16 overflow-hidden rounded-sm bg-ink-700">
+          <span
+            className={`block h-full ${barTone}`}
+            style={{ width: `${pct * 100}%` }}
+          />
+        </span>
+        <span className="text-muted-faint">
+          · ~{Math.round(fuel.estimatedRangeNm)}nm
+        </span>
+      </div>
+      <span className={tone}>{hint}</span>
+    </div>
+  );
+}
+
+function ReasonChips({
+  reasons,
+  cannotDispatchReason,
+}: {
+  reasons: string[];
+  cannotDispatchReason?: string;
+}) {
   if (reasons.length === 0) return null;
   return (
     <div className="mt-2 flex flex-wrap gap-1">
       {reasons.map((r) => (
         <span
           key={r}
+          title={r === "CANNOT_DISPATCH" ? cannotDispatchReason : undefined}
           className="rounded-sm border border-urgency-critical/40 bg-urgency-critical/[0.07] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-callsign text-urgency-critical/90"
         >
           {REASON_LABEL[r] ?? r}
@@ -215,7 +273,14 @@ export function AircraftCandidatesPanel({
                 </span>
               </div>
 
-              {!isEligible && <ReasonChips reasons={c.eligibility.reasons} />}
+              <FuelLine fuel={c.fuel} />
+
+              {!isEligible && (
+                <ReasonChips
+                  reasons={c.eligibility.reasons}
+                  cannotDispatchReason={c.cannotDispatchReason}
+                />
+              )}
             </button>
           );
         })}
