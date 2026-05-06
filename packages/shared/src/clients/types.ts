@@ -1,3 +1,5 @@
+import type { ClientVoice } from "../briefings/types.js";
+
 export type Role = "bush" | "air_taxi" | "light_jet";
 export type AircraftClass = "SEP" | "MEP" | "SET" | "JET";
 export type PayloadType = "cargo" | "pax" | "medical" | "survey" | "mixed";
@@ -36,4 +38,5 @@ export interface ClientDefinition {
   reputationGateMax: number;
   standardTemplates: JobTemplate[];
   premiumTemplates: JobTemplate[];
+  voice?: ClientVoice;
 }

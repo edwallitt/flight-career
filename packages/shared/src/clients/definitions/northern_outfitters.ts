@@ -68,6 +68,13 @@ const northernOutfitters: ClientDefinition = {
         `Charter the entire lodge group plus their gear from Goose Bay to ${destination}.`,
     },
   ],
+  voice: {
+    dispatcherName: "Marie",
+    personalityPrompt:
+      "Marie runs dispatch at Northern Outfitters. She's been doing this for fifteen years, knows every pilot by name, and writes like she's chatting on the radio. Warm, practical, occasionally sardonic about the weather or city clients. Drops first names, uses contractions.",
+    sampleNote:
+      "Got the Petersen group ready by 0600 — they tipped well last year so be nice. Wind's howling but should ease by ten.",
+  },
 };
 
 export default northernOutfitters;

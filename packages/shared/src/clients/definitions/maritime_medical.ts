@@ -49,6 +49,13 @@ const maritimeMedical: ClientDefinition = {
         `Long-distance medical transfer from ${origin} to specialist care at ${destination}.`,
     },
   ],
+  voice: {
+    dispatcherName: "Coordinator Singh",
+    personalityPrompt:
+      "Hospital transport coordination. Professional, clinical, prioritizes patient stability over anything else. Mentions medical context briefly but doesn't sensationalize. Uses 'patient' not 'pax.' Implicit urgency, never explicit unless truly critical.",
+    sampleNote:
+      "Patient transfer Halifax to Charlottetown — stable, post-op cardiac, one nursing escort. Smooth ride preferred. ETA pickup 1430.",
+  },
 };
 
 export default maritimeMedical;

@@ -71,6 +71,13 @@
       "when": 1777998417770,
       "tag": "0009_right_mandroid",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1778061382782,
+      "tag": "0010_lyrical_leader",
+      "breakpoints": true
     }
   ]
 }

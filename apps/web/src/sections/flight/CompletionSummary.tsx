@@ -1,10 +1,32 @@
 import type { CompleteFlightOutput } from "@flightcareer/shared";
 import { useEffect, useRef, useState } from "react";
 import { formatCash } from "../../lib/formatters.js";
+import {
+  RouteMap,
+  type MapAirport,
+  type MapRoute,
+} from "../../components/map/RouteMap.js";
+
+export interface CompletionSummaryRoute {
+  originIcao: string;
+  originName: string;
+  originLat: number;
+  originLon: number;
+  actualIcao: string;
+  actualName: string;
+  actualLat: number;
+  actualLon: number;
+  plannedIcao: string;
+  plannedName: string;
+  plannedLat: number;
+  plannedLon: number;
+  isDiversion: boolean;
+}
 
 export interface CompletionSummaryData extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
+  route: CompletionSummaryRoute;
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -262,46 +284,53 @@ export function CompletionSummary({
 
         {/* Body */}
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-8 py-6">
-          {/* Route */}
-          <div className="rounded-sm border border-ink-600 bg-ink-750 p-5">
+          {/* Route — chart with diversion ghost when applicable */}
+          <div className="flex flex-col gap-4 rounded-sm border border-ink-600 bg-ink-750 p-5">
             <div className="flex items-center justify-center gap-8">
               <div className="flex flex-col items-end">
                 <span className="label">From</span>
-                <span className="icao text-[36px] font-medium leading-none text-text-high">
+                <span className="icao text-[32px] font-medium leading-none text-text-high">
                   {originIcao}
+                </span>
+                <span className="mt-1 max-w-[200px] truncate text-tiny text-muted-dim">
+                  {summary.route.originName}
                 </span>
               </div>
               <div className="flex flex-1 flex-col items-center">
-                <svg
-                  width="100%"
-                  height="14"
-                  viewBox="0 0 240 14"
-                  preserveAspectRatio="none"
-                  className={cfg.tone}
-                  aria-hidden
-                >
-                  <line
-                    x1="2"
-                    y1="7"
-                    x2="238"
-                    y2="7"
-                    stroke="currentColor"
-                    strokeDasharray="3 4"
-                  />
-                  <circle cx="2" cy="7" r="3" fill="currentColor" />
-                  <circle cx="238" cy="7" r="3" fill="currentColor" />
-                </svg>
-                <span className="mt-1 font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+                <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
                   flown
                 </span>
+                <span
+                  className={[
+                    "mt-1 font-mono text-[18px] uppercase tracking-callsign",
+                    cfg.tone,
+                  ].join(" ")}
+                >
+                  ▸▸▸
+                </span>
+                {summary.route.isDiversion && (
+                  <span className="mt-1 font-mono text-[10px] uppercase tracking-callsign text-urgency-urgent">
+                    diverted from {summary.route.plannedIcao}
+                  </span>
+                )}
               </div>
               <div className="flex flex-col items-start">
                 <span className="label">To</span>
-                <span className="icao text-[36px] font-medium leading-none text-text-high">
+                <span className="icao text-[32px] font-medium leading-none text-text-high">
                   {destinationIcao}
+                </span>
+                <span className="mt-1 max-w-[200px] truncate text-tiny text-muted-dim">
+                  {summary.route.actualName}
                 </span>
               </div>
             </div>
+
+            <RouteMap
+              height={240}
+              paddingPx={36}
+              airports={buildSummaryAirports(summary.route)}
+              routes={buildSummaryRoutes(summary.route)}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-5">
@@ -476,4 +505,54 @@ export function CompletionSummary({
       </div>
     </div>
   );
+}
+
+function buildSummaryAirports(route: CompletionSummaryRoute): MapAirport[] {
+  const aps: MapAirport[] = [
+    {
+      icao: route.originIcao,
+      lat: route.originLat,
+      lon: route.originLon,
+      label: route.originIcao,
+      marker: "origin",
+    },
+    {
+      icao: route.actualIcao,
+      lat: route.actualLat,
+      lon: route.actualLon,
+      // Player just arrived here — render the pulsing "current" treatment.
+      label: route.actualIcao,
+      marker: "current",
+    },
+  ];
+  if (route.isDiversion && route.plannedIcao !== route.actualIcao) {
+    aps.push({
+      icao: route.plannedIcao,
+      lat: route.plannedLat,
+      lon: route.plannedLon,
+      label: `${route.plannedIcao} · planned`,
+      marker: "destination",
+    });
+  }
+  return aps;
+}
+
+function buildSummaryRoutes(route: CompletionSummaryRoute): MapRoute[] {
+  const routes: MapRoute[] = [
+    {
+      fromIcao: route.originIcao,
+      toIcao: route.actualIcao,
+      style: "solid",
+      tone: "primary",
+    },
+  ];
+  if (route.isDiversion && route.plannedIcao !== route.actualIcao) {
+    routes.push({
+      fromIcao: route.originIcao,
+      toIcao: route.plannedIcao,
+      style: "dashed",
+      tone: "ghost",
+    });
+  }
+  return routes;
 }

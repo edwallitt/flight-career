@@ -33,6 +33,13 @@ const bostonHalifaxExecutive: ClientDefinition = {
     },
   ],
   premiumTemplates: [],
+  voice: {
+    dispatcherName: "Operations",
+    personalityPrompt:
+      "Executive bizjet operations for finance clients. Dry, efficient, precise. Treats flights as logistics. Mentions seniority of passengers obliquely ('senior partner'). Never elaborates beyond what the pilot needs to know.",
+    sampleNote:
+      "Four pax KBOS to CYHZ, including senior MD. ETD 0700 firm. Standard catering. Return same-day not yet confirmed.",
+  },
 };
 
 export default bostonHalifaxExecutive;

@@ -56,7 +56,7 @@ const NAV: NavItem[] = [
     to: "/career",
     code: "CRW",
     label: "Career",
-    enabled: false,
+    enabled: true,
     icon: (
       <ItemIcon d="M5 7h14v12H5zM9 7V5a3 3 0 0 1 6 0v2" />
     ),
@@ -65,7 +65,7 @@ const NAV: NavItem[] = [
     to: "/logbook",
     code: "LOG",
     label: "Logbook",
-    enabled: false,
+    enabled: true,
     icon: (
       <ItemIcon d="M5 4h11l3 3v13H5zM9 9h7M9 13h7M9 17h4" />
     ),
@@ -74,7 +74,7 @@ const NAV: NavItem[] = [
     to: "/map",
     code: "MAP",
     label: "Atlas",
-    enabled: false,
+    enabled: true,
     icon: (
       <ItemIcon d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14" />
     ),
@@ -85,9 +85,23 @@ export function Sidebar() {
   const fleetQuery = trpc.hangar.fleet.useQuery(undefined, {
     refetchInterval: 30_000,
   });
+  const headlineQuery = trpc.logbook.headline.useQuery(undefined, {
+    refetchInterval: 30_000,
+  });
+  const careerSnapshotQuery = trpc.career.snapshot.useQuery(undefined, {
+    refetchInterval: 30_000,
+  });
   const fleetCount = fleetQuery.data?.length ?? 0;
+  const flightCount = headlineQuery.data?.totalFlights ?? 0;
+  const hasPendingExam =
+    careerSnapshotQuery.data?.ratings.some((r) => r.pendingExam != null) ??
+    false;
   const badgeByCode: Record<string, string | null> = {
     HGR: fleetCount > 0 ? String(fleetCount) : null,
+    LOG: flightCount > 0 ? String(flightCount) : null,
+  };
+  const dotByCode: Record<string, boolean> = {
+    CRW: hasPendingExam,
   };
   return (
     <aside className="flex w-[212px] shrink-0 flex-col border-r border-ink-600 bg-ink-800">
@@ -157,6 +171,12 @@ export function Sidebar() {
                   {item.icon}
                 </span>
                 <span className="flex-1">{item.label}</span>
+                {dotByCode[item.code] && (
+                  <span
+                    title="Pending exam"
+                    className="h-1.5 w-1.5 rounded-full bg-amber-glow shadow-[0_0_4px_rgba(212,165,116,0.6)]"
+                  />
+                )}
                 {badgeByCode[item.code] && (
                   <span
                     className={[

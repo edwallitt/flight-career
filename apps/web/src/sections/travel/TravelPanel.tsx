@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { formatCash, formatSimDateTime } from "../../lib/formatters.js";
 import { AirportPicker } from "./AirportPicker.js";
+import { RouteMap } from "../../components/map/RouteMap.js";
 
 type TabKey = "pilot" | "aircraft" | "pilot_aircraft";
 
@@ -355,6 +356,34 @@ export function TravelPanel({ onClose }: { onClose: () => void }) {
                     </span>
                   </div>
                 </div>
+
+                <RouteMap
+                  height={140}
+                  paddingPx={28}
+                  airports={[
+                    {
+                      icao: preview.originIcao,
+                      lat: preview.originLat,
+                      lon: preview.originLon,
+                      label: preview.originIcao,
+                      marker: "origin",
+                    },
+                    {
+                      icao: preview.destinationIcao,
+                      lat: preview.destinationLat,
+                      lon: preview.destinationLon,
+                      label: preview.destinationIcao,
+                      marker: "destination",
+                    },
+                  ]}
+                  routes={[
+                    {
+                      fromIcao: preview.originIcao,
+                      toIcao: preview.destinationIcao,
+                      style: "solid",
+                    },
+                  ]}
+                />
 
                 <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-sm border border-ink-600 bg-ink-750 p-4">
                   <div className="flex flex-col">

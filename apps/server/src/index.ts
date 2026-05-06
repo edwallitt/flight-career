@@ -1,7 +1,22 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// Load .env from repo root (apps/server -> ../../.env). Idempotent and
+// silently ignores a missing file. Must run before any module that reads
+// process.env is imported.
+try {
+  process.loadEnvFile(
+    resolve(fileURLToPath(import.meta.url), "../../../../.env"),
+  );
+} catch {
+  // No .env file — fall back to whatever the shell set.
+}
+
 import { serve } from "@hono/node-server";
 import { trpcServer } from "@hono/trpc-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { processExams } from "./services/career.js";
 import { tickJobGeneration } from "./services/jobBoard.js";
 import { refreshMarketplace } from "./services/marketplace.js";
 import { processLoanPayments } from "./services/purchase.js";
@@ -42,6 +57,15 @@ setInterval(() => {
     }
   } catch (err) {
     console.error("[loans] failed:", err);
+  }
+
+  try {
+    const examResult = processExams();
+    if (examResult.resolved > 0) {
+      console.log(`[exams] ${examResult.resolved} exam(s) resolved`);
+    }
+  } catch (err) {
+    console.error("[exams] failed:", err);
   }
 
   tickCount++;

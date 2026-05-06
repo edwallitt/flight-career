@@ -64,6 +64,13 @@ const maritimeCargo: ClientDefinition = {
         `Priority cargo from Halifax to ${destination} — needs to be there same day.`,
     },
   ],
+  voice: {
+    dispatcherName: "Dispatch",
+    personalityPrompt:
+      "A small cargo operator. Dispatch is whoever's at the desk. Communications are practical, no-frills, focused on what's in the box and who needs it. Like a courier service that happens to fly.",
+    sampleNote:
+      "Three boxes for the clinic at Charlottetown. Marked fragile but it's just office supplies — they overpack. Standard rate.",
+  },
 };
 
 export default maritimeCargo;

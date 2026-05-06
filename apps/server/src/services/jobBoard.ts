@@ -350,7 +350,11 @@ export interface JobDetail extends JobListItem {
   description: string;
   clientDescription: string | null;
   originName: string | null;
+  originLat: number | null;
+  originLon: number | null;
   destinationName: string | null;
+  destinationLat: number | null;
+  destinationLon: number | null;
 }
 
 export function getJobById(id: number): JobDetail | null {
@@ -374,6 +378,10 @@ export function getJobById(id: number): JobDetail | null {
     description: row.description,
     clientDescription: client?.description ?? null,
     originName: originAp?.name ?? null,
+    originLat: originAp?.lat ?? null,
+    originLon: originAp?.lon ?? null,
     destinationName: destAp?.name ?? null,
+    destinationLat: destAp?.lat ?? null,
+    destinationLon: destAp?.lon ?? null,
   };
 }

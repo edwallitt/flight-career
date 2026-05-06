@@ -778,6 +778,23 @@ export interface CompleteFlightActionInput {
 export interface CompletionSummaryPayload extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
+  // Geographic route data so the summary modal can render an actual chart.
+  // `planned*` differs from actual when the pilot diverted.
+  route: {
+    originIcao: string;
+    originName: string;
+    originLat: number;
+    originLon: number;
+    actualIcao: string;
+    actualName: string;
+    actualLat: number;
+    actualLon: number;
+    plannedIcao: string;
+    plannedName: string;
+    plannedLat: number;
+    plannedLon: number;
+    isDiversion: boolean;
+  };
 }
 
 export type CompleteFlightActionResult =
@@ -954,6 +971,20 @@ export function completeFlightAction(
       adjustReputation(delta.scope, delta.delta, simNow);
     }
 
+    // Accumulate hours toward this class's rating requirements.
+    const blockHours = input.blockTimeMinutes / 60;
+    const ratingRow = tx
+      .select()
+      .from(ratings)
+      .where(eq(ratings.class, typeRow.class))
+      .get();
+    if (ratingRow) {
+      tx.update(ratings)
+        .set({ hoursInClass: ratingRow.hoursInClass + blockHours })
+        .where(eq(ratings.class, typeRow.class))
+        .run();
+    }
+
     // Owned aircraft updates
     const inspectionLines: string[] = [];
     if (ownedAircraftRow && summary.aircraftUpdates) {
@@ -1043,6 +1074,21 @@ export function completeFlightAction(
       ...summary,
       inspectionAlerts: inspectionLines,
       cashAppliedNow: summary.netCashDelta,
+      route: {
+        originIcao: jobOriginRow.icao,
+        originName: jobOriginRow.name,
+        originLat: jobOriginRow.lat,
+        originLon: jobOriginRow.lon,
+        actualIcao: destRow.icao,
+        actualName: destRow.name,
+        actualLat: destRow.lat,
+        actualLon: destRow.lon,
+        plannedIcao: jobDestRow.icao,
+        plannedName: jobDestRow.name,
+        plannedLat: jobDestRow.lat,
+        plannedLon: jobDestRow.lon,
+        isDiversion,
+      },
     };
 
     return { ok: true, summary: finalSummary };

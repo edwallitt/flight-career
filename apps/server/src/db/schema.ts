@@ -215,6 +215,7 @@ export const jobs = sqliteTable("jobs", {
   }).notNull(),
   legsJson: text("legs_json"),
   description: text("description").notNull().default(""),
+  briefingJson: text("briefing_json"),
   distanceNm: real("distance_nm").notNull().default(0),
   status: text("status", {
     enum: ["open", "accepted", "in_progress", "completed", "expired", "cancelled"],

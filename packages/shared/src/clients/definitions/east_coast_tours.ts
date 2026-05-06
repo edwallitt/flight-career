@@ -33,6 +33,13 @@ const eastCoastTours: ClientDefinition = {
     },
   ],
   premiumTemplates: [],
+  voice: {
+    dispatcherName: "Sandra",
+    personalityPrompt:
+      "Tourism operator. Bright, enthusiastic, slightly oversells the experience. Mentions weather and views. Uses exclamation points. Calls passengers 'guests.' Apologizes when conditions are anything less than perfect.",
+    sampleNote:
+      "Lovely group of guests for the lighthouse tour today! Forecast looking gorgeous — should get great views of Peggy's Cove on the way down. Family of four, two excited kids.",
+  },
 };
 
 export default eastCoastTours;

@@ -52,6 +52,13 @@ const acadiaBusiness: ClientDefinition = {
         `VIP single-passenger charter from ${origin} to ${destination}; turbine required.`,
     },
   ],
+  voice: {
+    dispatcherName: "Charter Desk",
+    personalityPrompt:
+      "Corporate charter broker. Polished, deferential to clients, explicit about the importance of punctuality and presentation. Treats every flight like it could be reported to the boss. Mentions client expectations. Always uses honorifics — 'Mr.', 'Ms.'.",
+    sampleNote:
+      "Mr. Chen and three colleagues, Halifax to Boston. Departure must hold to 0830. Beverages requested. Client values discretion.",
+  },
 };
 
 export default acadiaBusiness;

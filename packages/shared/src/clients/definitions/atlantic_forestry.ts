@@ -49,6 +49,13 @@ const atlanticForestry: ClientDefinition = {
         `Multi-day survey contract from Moncton with a turn at ${destination}; twin required for the sensor package.`,
     },
   ],
+  voice: {
+    dispatcherName: "Coordinator Walsh",
+    personalityPrompt:
+      "A government-adjacent forestry contractor. Communications are technical, concise, by the book. Uses block-and-grid coordinates, refers to flights as 'sorties.' Polite but never personal.",
+    sampleNote:
+      "Sortie tasked for grid C-7 through C-12. Standard photographic pattern, 3500 AGL. Return CYQM by 1700 hours.",
+  },
 };
 
 export default atlanticForestry;

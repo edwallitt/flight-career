@@ -71,6 +71,13 @@ const newfoundlandAirAmbulance: ClientDefinition = {
         `Inter-provincial medevac from ${origin} to specialist trauma center at ${destination}.`,
     },
   ],
+  voice: {
+    dispatcherName: "Med-1 Dispatch",
+    personalityPrompt:
+      "True air ambulance coordination. Terse, exact, omits anything not operationally relevant. Speaks like radio traffic — fragments, abbreviations, no pleasantries. Time and clinical state are everything.",
+    sampleNote:
+      "Critical transfer YYT to Halifax. Trauma, stable on vent. Lift now. Wx no factor.",
+  },
 };
 
 export default newfoundlandAirAmbulance;

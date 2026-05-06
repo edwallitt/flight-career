@@ -1,4 +1,9 @@
+import { getClientById, type BriefingContent } from "@flightcareer/shared";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { db } from "../../db/client.js";
+import { jobs } from "../../db/schema.js";
+import { generateBriefing } from "../../services/briefingGenerator.js";
 import {
   getJobById,
   getOpenJobs,
@@ -6,6 +11,14 @@ import {
   tickJobGeneration,
 } from "../../services/jobBoard.js";
 import { publicProcedure, router } from "../trpc.js";
+
+export type GetBriefingResult =
+  | {
+      briefing: BriefingContent;
+      source: "cached" | "generated";
+      dispatcherName: string | null;
+    }
+  | { briefing: null; error: string };
 
 export const jobsRouter = router({
   list: publicProcedure.query(() => getOpenJobs()),
@@ -17,6 +30,26 @@ export const jobsRouter = router({
   getById: publicProcedure
     .input(z.object({ id: z.number().int().positive() }))
     .query(({ input }) => getJobById(input.id)),
+
+  getBriefing: publicProcedure
+    .input(z.object({ jobId: z.number().int().positive() }))
+    .query(async ({ input }): Promise<GetBriefingResult> => {
+      const result = await generateBriefing(input.jobId);
+      if (!result.ok) {
+        return { briefing: null, error: result.error };
+      }
+      const row = db
+        .select({ clientId: jobs.clientId })
+        .from(jobs)
+        .where(eq(jobs.id, input.jobId))
+        .get();
+      const clientDef = row?.clientId ? getClientById(row.clientId) : undefined;
+      return {
+        briefing: result.briefing,
+        source: result.source,
+        dispatcherName: clientDef?.voice?.dispatcherName ?? null,
+      };
+    }),
 
   tickNow: publicProcedure.mutation(() => {
     const result = tickJobGeneration();

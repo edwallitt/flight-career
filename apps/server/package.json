@@ -17,6 +17,7 @@
     "audit-listings": "tsx src/scripts/audit-listings.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.94.0",
     "@flightcareer/shared": "workspace:*",
     "@hono/node-server": "^1.13.7",
     "@hono/trpc-server": "^0.3.4",

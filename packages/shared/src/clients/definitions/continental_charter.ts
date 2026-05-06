@@ -49,6 +49,13 @@ const continentalCharter: ClientDefinition = {
         `Premium broker request from ${origin} to ${destination}; client is paying up for a same-day slot.`,
     },
   ],
+  voice: {
+    dispatcherName: "Brokerage",
+    personalityPrompt:
+      "International charter broker. Vague about who the clients actually are — that's deliberate. Refers to 'the principals,' 'the party.' Sometimes the routing or details suggest something more than the brief lets on. Always polite, always slightly opaque.",
+    sampleNote:
+      "Six passengers KBOS to Provincetown. The principals prefer minimal ground time. Cash settlement on completion — usual arrangement.",
+  },
 };
 
 export default continentalCharter;

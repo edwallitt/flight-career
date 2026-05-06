@@ -1,3 +1,4 @@
+import type { BriefingContent } from "@flightcareer/shared";
 import { useEffect, useState } from "react";
 import { trpc } from "../../trpc.js";
 import {
@@ -8,6 +9,7 @@ import {
   ROLE_LABEL,
 } from "../../lib/formatters.js";
 import { AircraftCandidatesPanel } from "../active/AircraftCandidatesPanel.js";
+import { RouteMap } from "../../components/map/RouteMap.js";
 import type { AircraftSelection } from "../active/types.js";
 import type { ReachabilityStatus } from "./types.js";
 
@@ -103,6 +105,96 @@ function CloseIcon() {
   );
 }
 
+function BriefingSection({
+  isPending,
+  briefing,
+  dispatcherName,
+  fallbackDescription,
+  clientDescription,
+  clientName,
+}: {
+  isPending: boolean;
+  briefing: BriefingContent | null;
+  dispatcherName: string | null;
+  fallbackDescription: string;
+  clientDescription: string | null;
+  clientName: string | null;
+}) {
+  if (isPending) {
+    return (
+      <div className="rounded-sm border-l-2 border-amber-deep/70 bg-ink-750/40 p-4">
+        <div className="flex items-center gap-2 font-mono text-micro uppercase tracking-callsign text-muted-dim">
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-amber-glow/60" />
+          Reviewing dispatch details…
+        </div>
+      </div>
+    );
+  }
+
+  if (!briefing) {
+    return (
+      <div className="border-l-2 border-amber-deep/70 pl-3">
+        <p className="text-[13px] leading-relaxed text-text">
+          {fallbackDescription}
+        </p>
+        {clientDescription && (
+          <p className="mt-3 text-tiny italic text-muted">
+            {clientDescription}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-sm border-l-2 border-amber-glow/70 bg-ink-750/60 p-4">
+      <div className="mb-3 flex items-center gap-2 font-mono text-micro uppercase tracking-callsign text-amber-glow">
+        <span className="h-1.5 w-1.5 rounded-full bg-amber-glow shadow-[0_0_6px_rgba(212,165,116,0.6)]" />
+        Briefing
+      </div>
+
+      <div className="space-y-3 text-[13px] leading-relaxed text-text">
+        <div>
+          <div className="label mb-1">Cargo / Passengers</div>
+          <p>{briefing.cargoDescription}</p>
+        </div>
+
+        <div>
+          <div className="label mb-1">From the dispatcher</div>
+          <p>{briefing.dispatcherNote}</p>
+          {(dispatcherName || clientName) && (
+            <p className="mt-1 text-tiny italic text-muted">
+              — {dispatcherName ?? "Dispatch"}
+              {clientName ? `, ${clientName}` : ""}
+            </p>
+          )}
+        </div>
+
+        {briefing.recipientNote && (
+          <div>
+            <div className="label mb-1">Recipient</div>
+            <p>{briefing.recipientNote}</p>
+          </div>
+        )}
+
+        {briefing.handlingNotes.length > 0 && (
+          <div>
+            <div className="label mb-1">Handling notes</div>
+            <ul className="space-y-0.5 text-tiny text-muted">
+              {briefing.handlingNotes.map((note: string, i: number) => (
+                <li key={i} className="flex gap-2">
+                  <span className="text-amber-deep">▸</span>
+                  <span>{note}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Field({
   label,
   children,
@@ -143,6 +235,15 @@ export function JobDrawer({
   const detail = trpc.jobs.getById.useQuery(
     { id: jobId ?? -1 },
     { enabled: jobId != null },
+  );
+  const briefingQuery = trpc.jobs.getBriefing.useQuery(
+    { jobId: jobId ?? -1 },
+    {
+      enabled: jobId != null,
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      retry: false,
+    },
   );
   const activeJob = trpc.lifecycle.getActiveJob.useQuery();
   const candidates = trpc.aircraft.candidatesForJob.useQuery(
@@ -264,8 +365,8 @@ export function JobDrawer({
             )}
 
             {/* Route block */}
-            <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
-              <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 rounded-sm border border-ink-600 bg-ink-750 p-4">
+              <div className="flex items-start justify-between gap-3">
                 <div className="flex flex-col">
                   <span className="label">From</span>
                   <span className="icao text-[22px] font-medium text-text-high">
@@ -275,34 +376,6 @@ export function JobDrawer({
                     {job.originName ?? ""}
                   </span>
                 </div>
-
-                <div className="mx-3 flex flex-1 items-center justify-center">
-                  <div className="flex flex-1 flex-col items-center">
-                    <svg
-                      width="100%"
-                      height="14"
-                      viewBox="0 0 200 14"
-                      preserveAspectRatio="none"
-                      className="text-amber-deep"
-                      aria-hidden
-                    >
-                      <line
-                        x1="2"
-                        y1="7"
-                        x2="198"
-                        y2="7"
-                        stroke="currentColor"
-                        strokeDasharray="3 4"
-                      />
-                      <circle cx="2" cy="7" r="2.5" fill="currentColor" />
-                      <circle cx="198" cy="7" r="2.5" fill="currentColor" />
-                    </svg>
-                    <span className="mt-1 font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
-                      single leg
-                    </span>
-                  </div>
-                </div>
-
                 <div className="flex flex-col items-end">
                   <span className="label">To</span>
                   <span className="icao text-[22px] font-medium text-text-high">
@@ -313,19 +386,63 @@ export function JobDrawer({
                   </span>
                 </div>
               </div>
+
+              {job.originLat != null &&
+              job.originLon != null &&
+              job.destinationLat != null &&
+              job.destinationLon != null ? (
+                <RouteMap
+                  height={160}
+                  paddingPx={24}
+                  airports={[
+                    {
+                      icao: job.originIcao,
+                      lat: job.originLat,
+                      lon: job.originLon,
+                      label: job.originIcao,
+                      marker: "origin",
+                    },
+                    {
+                      icao: job.destinationIcao,
+                      lat: job.destinationLat,
+                      lon: job.destinationLon,
+                      label: job.destinationIcao,
+                      marker: "destination",
+                    },
+                  ]}
+                  routes={[
+                    {
+                      fromIcao: job.originIcao,
+                      toIcao: job.destinationIcao,
+                      style: "dashed",
+                    },
+                  ]}
+                />
+              ) : null}
+
+              <div className="text-center font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+                single leg
+              </div>
             </div>
 
-            {/* Description */}
-            <div className="border-l-2 border-amber-deep/70 pl-3">
-              <p className="text-[13px] leading-relaxed text-text">
-                {job.description}
-              </p>
-              {job.clientDescription && (
-                <p className="mt-3 text-tiny italic text-muted">
-                  {job.clientDescription}
-                </p>
-              )}
-            </div>
+            {/* Briefing or fallback description */}
+            <BriefingSection
+              isPending={briefingQuery.isPending}
+              briefing={
+                briefingQuery.data && "briefing" in briefingQuery.data
+                  ? (briefingQuery.data.briefing as BriefingContent | null)
+                  : null
+              }
+              dispatcherName={
+                briefingQuery.data && "dispatcherName" in briefingQuery.data
+                  ? ((briefingQuery.data as { dispatcherName: string | null })
+                      .dispatcherName ?? null)
+                  : null
+              }
+              fallbackDescription={job.description}
+              clientDescription={job.clientDescription}
+              clientName={job.clientName}
+            />
 
             {/* Stats grid */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-sm border border-ink-600 bg-ink-750 p-4">

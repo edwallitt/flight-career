@@ -64,6 +64,13 @@ const timeCriticalLogistics: ClientDefinition = {
         `Premium time-critical contract from ${origin} to ${destination}; pays heavily for guaranteed dispatch.`,
     },
   ],
+  voice: {
+    dispatcherName: "Control",
+    personalityPrompt:
+      "AOG parts and time-critical logistics. Communications are direct, demanding, slightly impatient. Treats every minute as money. Names the part or the cargo. Tells you what's at stake — a grounded jet, a delayed surgery — to motivate the urgency.",
+    sampleNote:
+      "Hot section blade for an EJM Phenom AOG at CYQM. Customer is screaming. We need wheels up in 30.",
+  },
 };
 
 export default timeCriticalLogistics;

@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { ComingSoon } from "./components/ComingSoon.js";
 import { Header } from "./components/Header.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { BriefingScreen } from "./sections/active/BriefingScreen.js";
 import { CurrentJobModal } from "./sections/active/CurrentJobModal.js";
+import { Atlas } from "./sections/atlas/Atlas.js";
+import { Career } from "./sections/career/Career.js";
 import { InFlightSurface } from "./sections/flight/InFlightSurface.js";
 import { Hangar } from "./sections/hangar/Hangar.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
+import { Logbook } from "./sections/logbook/Logbook.js";
 import { Marketplace } from "./sections/marketplace/Marketplace.js";
 import { TravelPanel } from "./sections/travel/TravelPanel.js";
 
@@ -30,18 +32,9 @@ export default function App() {
             <Route path="/jobs" element={<JobBoard />} />
             <Route path="/hangar" element={<Hangar />} />
             <Route path="/market" element={<Marketplace />} />
-            <Route
-              path="/career"
-              element={<ComingSoon title="Career" code="CRW" />}
-            />
-            <Route
-              path="/logbook"
-              element={<ComingSoon title="Logbook" code="LOG" />}
-            />
-            <Route
-              path="/map"
-              element={<ComingSoon title="Atlas" code="MAP" />}
-            />
+            <Route path="/career" element={<Career />} />
+            <Route path="/logbook" element={<Logbook />} />
+            <Route path="/map" element={<Atlas />} />
           </Routes>
         </main>
       </div>

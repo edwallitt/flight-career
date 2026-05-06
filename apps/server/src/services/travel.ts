@@ -12,8 +12,10 @@ import {
   airports,
   career,
   ownedAircraft,
+  ratings,
   transfers,
 } from "../db/schema.js";
+import { processExams } from "./career.js";
 import { fuelPriceCentsPerGal } from "./jobLifecycle.js";
 import { tickJobGeneration } from "./jobBoard.js";
 import { processLoanPayments } from "./purchase.js";
@@ -28,8 +30,13 @@ export interface TransferPreview {
   estimate: TransferEstimate;
   willArriveAt: number;
   originIcao: string;
+  originName: string;
+  originLat: number;
+  originLon: number;
   destinationIcao: string;
   destinationName: string;
+  destinationLat: number;
+  destinationLon: number;
   distanceNm: number;
 }
 
@@ -153,8 +160,13 @@ export function previewTransfer(req: TransferRequest): PreviewResult {
       estimate,
       willArriveAt,
       originIcao: ctx.originIcao,
+      originName: ctx.originRow.name,
+      originLat: ctx.originRow.lat,
+      originLon: ctx.originRow.lon,
       destinationIcao: ctx.destRow.icao,
       destinationName: ctx.destRow.name,
+      destinationLat: ctx.destRow.lat,
+      destinationLon: ctx.destRow.lon,
       distanceNm: ctx.distanceNm,
     },
   };
@@ -202,6 +214,25 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
         .run();
     }
 
+    // pilot_aircraft = player flies the aircraft, so they accumulate hours
+    // toward the rating. aircraft-only = a contract pilot ferries it; the
+    // player wasn't flying, so no rating credit.
+    if (req.type === "pilot_aircraft" && ctx.typeRow) {
+      const ratingRow = tx
+        .select()
+        .from(ratings)
+        .where(eq(ratings.class, ctx.typeRow.class))
+        .get();
+      if (ratingRow) {
+        tx.update(ratings)
+          .set({
+            hoursInClass: ratingRow.hoursInClass + estimate.aircraftHoursAccrued,
+          })
+          .where(eq(ratings.class, ctx.typeRow.class))
+          .run();
+      }
+    }
+
     const insertResult = tx
       .insert(transfers)
       .values({
@@ -239,6 +270,11 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
       processLoanPayments();
     } catch {
       // Loan payment failures are non-fatal — they'll be picked up next tick.
+    }
+    try {
+      processExams();
+    } catch {
+      // Exam resolution failures are non-fatal — they'll be picked up next tick.
     }
   }
 

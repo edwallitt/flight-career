@@ -69,6 +69,41 @@
   }
 }
 
+/* Dual-handle range slider used in the Atlas jobs filter. The track is drawn
+   by the parent div; both inputs share the same span and are made
+   transparent except for the thumb. */
+.atlas-range {
+  pointer-events: none;
+}
+.atlas-range::-webkit-slider-thumb {
+  pointer-events: auto;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #d4a574;
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 0 6px rgba(212, 165, 116, 0.5);
+  cursor: pointer;
+}
+.atlas-range::-moz-range-thumb {
+  pointer-events: auto;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #d4a574;
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 0 6px rgba(212, 165, 116, 0.5);
+  cursor: pointer;
+}
+.atlas-range::-webkit-slider-runnable-track {
+  background: transparent;
+}
+.atlas-range::-moz-range-track {
+  background: transparent;
+}
+
 /* Vertical bar charts used in seat-of-the-pants meters. */
 .bar-stack {
   display: flex;
