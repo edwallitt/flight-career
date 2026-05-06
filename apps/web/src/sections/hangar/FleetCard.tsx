@@ -375,7 +375,7 @@ export function FleetCard({
 
       {/* Loan + value */}
       <div className="flex flex-col gap-2 border-t border-ink-600 px-5 py-3">
-        {aircraft.loan && (
+        {aircraft.loan && !aircraft.loan.fullyPaid && (
           <div className="flex items-baseline justify-between">
             <span className="label">Loan</span>
             <span className="font-mono text-[12px] tabular-nums text-text-high">

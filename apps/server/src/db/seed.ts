@@ -16,11 +16,11 @@ import { refreshMarketplace, rngFromSeed } from "../services/marketplace.js";
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
 const ROLE_SCOPES = ["bush", "air_taxi", "light_jet"] as const;
 
-// A meaningful starting baseline for role reputation. With a 0–100 cap, a
-// score of 0 makes early cancel penalties no-ops because the floor pins
-// them. 25 leaves headroom for the first few cancellation hits to actually
-// register, while staying below the typical premium-template gates.
-const STARTING_ROLE_REPUTATION = 25;
+// Role reputation starts at 0 — a player who has never flown in a role hasn't
+// earned standing in it. Tier display treats 0 as NOVICE. Cancel penalties
+// can't drag the score below 0, but that floor is fine: a player with no
+// reputation to lose simply hasn't built any yet.
+const STARTING_ROLE_REPUTATION = 0;
 
 // Rental availability rules. Order matters only for readability — types are
 // deduplicated below before insertion.

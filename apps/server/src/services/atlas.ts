@@ -44,6 +44,7 @@ export interface AtlasOwnedAircraft {
   airframeHours: number;
   engineHoursSinceOverhaul: number;
   tboHours: number;
+  fuelType: "avgas" | "jet-a";
 }
 
 export interface AtlasRecentFlight {
@@ -148,6 +149,7 @@ export function getAtlasData(): AtlasData {
     airframeHours: owned.airframeHours,
     engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
     tboHours: type.tboHours,
+    fuelType: type.fuelType,
   }));
 
   const flightCutoff = simNow - RECENT_FLIGHT_WINDOW_MS;

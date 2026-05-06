@@ -258,7 +258,26 @@ export function HangarDrawer({
             </Section>
 
             {/* Loan */}
-            {aircraft.loan ? (
+            {aircraft.loan && aircraft.loan.fullyPaid ? (
+              <Section title="Loan">
+                <div className="font-mono text-[12px] text-emerald-300">
+                  Loan paid off — fully owned
+                  {aircraft.loan.paidOffAt != null && (
+                    <span className="ml-2 text-muted-dim">
+                      · {formatSimDateTime(aircraft.loan.paidOffAt)}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-2 font-mono text-[11px] text-muted-dim">
+                  <Field label="Original">
+                    {formatCash(aircraft.loan.principalCents)}
+                  </Field>
+                  <Field label="Term" align="right">
+                    {aircraft.loan.originalTermMonths} mo
+                  </Field>
+                </div>
+              </Section>
+            ) : aircraft.loan ? (
               <Section title="Loan">
                 <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                   <Field label="Remaining">
@@ -322,7 +341,7 @@ export function HangarDrawer({
                 <Field label="Insurance" align="right">
                   {formatCash(aircraft.insuranceMonthlyCents)}
                 </Field>
-                {aircraft.loan && (
+                {aircraft.loan && !aircraft.loan.fullyPaid && (
                   <>
                     <Field label="Loan payment">
                       {formatCash(aircraft.loan.monthlyPaymentCents)}

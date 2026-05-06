@@ -251,12 +251,27 @@ export function getCareerSnapshot(): CareerSnapshotFull | null {
     }
   }
 
-  const byRole: ReputationByRole[] = ROLES.map((role) => ({
-    role,
-    score: repByRole[role],
-    tier: tierForScore(repByRole[role]),
-    flightCount: flightCountByRole[role],
-  }));
+  // Defensive: if a role has zero completed flights, surface 0/NOVICE
+  // regardless of any drift in the underlying reputation row. A non-zero
+  // score with no flights logged is a data bug — log it once and don't let
+  // it leak into the UI.
+  const byRole: ReputationByRole[] = ROLES.map((role) => {
+    const flightCount = flightCountByRole[role];
+    const rawScore = repByRole[role];
+    const noFlightsButPositive = flightCount === 0 && rawScore > 0;
+    if (noFlightsButPositive) {
+      console.warn(
+        `[career] reputation drift: role=${role} score=${rawScore} but flightCount=0 — clamping display to 0`,
+      );
+    }
+    const displayScore = noFlightsButPositive ? 0 : rawScore;
+    return {
+      role,
+      score: displayScore,
+      tier: tierForScore(displayScore),
+      flightCount,
+    };
+  });
 
   const clientIdsWithRep = new Set<string>(repByClient.keys());
   for (const id of flightCountByClient.keys()) clientIdsWithRep.add(id);

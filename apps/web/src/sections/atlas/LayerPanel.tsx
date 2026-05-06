@@ -1,4 +1,7 @@
-import type { AtlasLayerSet } from "../../components/map/AtlasMap.js";
+import type {
+  AtlasLayerSet,
+  FuelPriceRange,
+} from "../../components/map/AtlasMap.js";
 
 interface LayerPanelProps {
   layers: AtlasLayerSet;
@@ -10,6 +13,12 @@ interface LayerPanelProps {
     player: number;
   };
   onChange: (next: AtlasLayerSet) => void;
+  fuelOverlayType?: "avgas" | "jet-a";
+  fuelOverlayRange?: FuelPriceRange | null;
+}
+
+function formatPriceCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 interface RowDef {
@@ -193,7 +202,13 @@ function PresetChip({
   );
 }
 
-export function LayerPanel({ layers, counts, onChange }: LayerPanelProps) {
+export function LayerPanel({
+  layers,
+  counts,
+  onChange,
+  fuelOverlayType,
+  fuelOverlayRange,
+}: LayerPanelProps) {
   const toggle = (key: keyof AtlasLayerSet) =>
     onChange({ ...layers, [key]: !layers[key] });
   const activePreset = PRESETS.find((p) => shallowEq(p.layers, layers));
@@ -277,6 +292,31 @@ export function LayerPanel({ layers, counts, onChange }: LayerPanelProps) {
           ))}
         </div>
       </div>
+
+      {layers.fuelPrices && fuelOverlayType && (
+        <div className="border-t border-ink-600/70 px-4 py-3">
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="label">Fuel price</span>
+            <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+              {fuelOverlayType === "jet-a" ? "Jet A" : "Avgas"}
+            </span>
+          </div>
+          <div className="h-2 w-full rounded-sm bg-gradient-to-r from-[#5ec47c] via-[#cfcfcf] to-[#e34d4d]" />
+          {fuelOverlayRange ? (
+            <div className="mt-1.5 flex items-baseline justify-between font-mono text-[10px] tabular-nums text-muted-dim">
+              <span>{formatPriceCents(fuelOverlayRange.lo)}/gal</span>
+              <span>{formatPriceCents(fuelOverlayRange.hi)}/gal</span>
+            </div>
+          ) : (
+            <div className="mt-1.5 font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+              No price data
+            </div>
+          )}
+          <div className="mt-2 font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+            Showing {fuelOverlayType === "jet-a" ? "Jet A" : "Avgas"} prices
+          </div>
+        </div>
+      )}
 
       {/* Collapsible legend — closed by default. */}
       <details className="group border-t border-ink-600/70 px-4 py-3 [&_summary::-webkit-details-marker]:hidden">

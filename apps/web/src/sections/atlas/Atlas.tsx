@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { trpc } from "../../trpc.js";
 import {
   AtlasMap,
+  chooseFuelOverlayType,
+  computeFuelPriceRange,
   type AtlasData,
   type AtlasFeatureRef,
   type AtlasJobFilters,
@@ -85,6 +87,15 @@ export function Atlas() {
   // unfiltered total — that's what the layer panel chip should show.
   const jobsBadgeCount = layers.jobs ? visibleJobsCount : counts.jobs;
 
+  const fuelOverlayType = useMemo(
+    () => (data ? chooseFuelOverlayType(data.ownedAircraft) : "jet-a"),
+    [data],
+  );
+  const fuelOverlayRange = useMemo(
+    () => (data ? computeFuelPriceRange(data.airports, fuelOverlayType) : null),
+    [data, fuelOverlayType],
+  );
+
   const handleFilteredJobsChange = useCallback((n: number) => {
     setVisibleJobsCount(n);
   }, []);
@@ -124,6 +135,8 @@ export function Atlas() {
             layers={layers}
             onChange={setLayers}
             counts={{ ...counts, jobs: jobsBadgeCount }}
+            fuelOverlayType={fuelOverlayType}
+            fuelOverlayRange={fuelOverlayRange}
           />
           {layers.jobs && data && (
             <JobsFilterPanel
@@ -146,6 +159,7 @@ export function Atlas() {
               onFilteredJobsChange={handleFilteredJobsChange}
               selectedFeature={selected}
               onFeatureClick={setSelected}
+              fuelOverlayType={fuelOverlayType}
             />
           )}
           {!data && (

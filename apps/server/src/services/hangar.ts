@@ -28,6 +28,8 @@ export interface OwnedLoanInfo {
   termMonths: number;
   originalTermMonths: number;
   paymentsMade: number;
+  fullyPaid: boolean;
+  paidOffAt: number | null;
 }
 
 export interface InProgressMaintenanceSummary {
@@ -117,26 +119,40 @@ function buildDetail(
   const estimatedValueCents = pricing.askingPriceCents;
 
   const loanInfo: OwnedLoanInfo | null = loanRow
-    ? {
-        id: loanRow.id,
-        principalCents: loanRow.principal,
-        remainingBalanceCents: loanRow.remainingBalance,
-        monthlyPaymentCents: loanRow.monthlyPayment,
-        interestRateBps: loanRow.interestRateBps,
-        nextPaymentDue: loanRow.nextPaymentDue,
-        termMonths: loanRow.termMonths,
-        originalTermMonths:
+    ? (() => {
+        const originalTerm =
           loanRow.originalTermMonths > 0
             ? loanRow.originalTermMonths
-            : loanRow.termMonths,
-        paymentsMade: loanRow.paymentsMade,
-      }
+            : loanRow.termMonths;
+        const fullyPaid =
+          loanRow.remainingBalance <= 0 &&
+          loanRow.paymentsMade >= originalTerm;
+        // Approximate the date of the final payment as one month before the
+        // *current* nextPaymentDue (which advances 30 days after each pay).
+        // Good enough for a celebratory "paid off on …" line.
+        const paidOffAt = fullyPaid
+          ? loanRow.nextPaymentDue - 30 * SIM_DAY_MS
+          : null;
+        return {
+          id: loanRow.id,
+          principalCents: loanRow.principal,
+          remainingBalanceCents: loanRow.remainingBalance,
+          monthlyPaymentCents: loanRow.monthlyPayment,
+          interestRateBps: loanRow.interestRateBps,
+          nextPaymentDue: loanRow.nextPaymentDue,
+          termMonths: loanRow.termMonths,
+          originalTermMonths: originalTerm,
+          paymentsMade: loanRow.paymentsMade,
+          fullyPaid,
+          paidOffAt,
+        };
+      })()
     : null;
 
   const monthlyFixedCostsCents =
     type.hangarageMonthly +
     type.insuranceMonthly +
-    (loanInfo ? loanInfo.monthlyPaymentCents : 0);
+    (loanInfo && !loanInfo.fullyPaid ? loanInfo.monthlyPaymentCents : 0);
 
   const loanLtvRatio =
     loanInfo && estimatedValueCents > 0

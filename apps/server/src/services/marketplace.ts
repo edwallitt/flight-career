@@ -158,6 +158,8 @@ export interface EnrichedListing {
   descriptionShort: string | null;
   listedAt: number;
   expiresAt: number;
+  fuelCapacityGal: number;
+  fuelType: "avgas" | "jet-a";
 }
 
 export interface ListingsInput {
@@ -207,6 +209,8 @@ function rowToEnriched(
     descriptionShort: listing.descriptionShort,
     listedAt: listing.listedAt,
     expiresAt: listing.expiresAt,
+    fuelCapacityGal: type.fuelCapacityGal,
+    fuelType: type.fuelType,
   };
 }
 

@@ -34,6 +34,7 @@ export interface AtlasOwnedAircraft {
   airframeHours: number;
   engineHoursSinceOverhaul: number;
   tboHours: number;
+  fuelType: "avgas" | "jet-a";
 }
 
 export interface AtlasRecentFlight {
@@ -120,6 +121,9 @@ export interface AtlasMapProps {
   onFeatureClick?: (feature: AtlasFeatureRef) => void;
   // Reports the filtered count back so the layer panel can render "8 / 14".
   onFilteredJobsChange?: (count: number) => void;
+  // Fuel type the overlay should color airports by. Driven by what the player
+  // actually consumes (any jet/turbine → jet-a, else avgas).
+  fuelOverlayType?: "avgas" | "jet-a";
 }
 
 // ---------------------------------------------------------------------------
@@ -191,25 +195,34 @@ const PLAYER_GREEN = "#5ec47c";
 // Feature collection builders
 // ---------------------------------------------------------------------------
 
-function buildAirportFC(airports: AtlasAirport[]): FeatureCollection<Point> {
+function buildAirportFC(
+  airports: AtlasAirport[],
+  fuelType: "avgas" | "jet-a",
+): FeatureCollection<Point> {
   return {
     type: "FeatureCollection",
-    features: airports.map((a) => ({
-      type: "Feature",
-      id: a.icao,
-      geometry: { type: "Point", coordinates: [a.lon, a.lat] },
-      properties: {
-        icao: a.icao,
-        name: a.name,
-        size: a.size,
-        radius: SIZE_RADIUS[a.size],
-        haloRadius: SIZE_RADIUS[a.size] + 6,
-        tierColor: SIZE_TIER_COLOR[a.size],
-        // Use jet-a if we have it, else avgas, else null. Atlases color by
-        // jet-a as the primary because it dominates the player's spend mix.
-        fuelPrice: a.fuelPriceJetA ?? a.fuelPriceAvgas ?? null,
-      },
-    })),
+    features: airports.map((a) => {
+      // Use the chosen fuel type. If the airport doesn't sell it, the overlay
+      // renders the marker as "no data" gray rather than guessing the other
+      // fuel — that's a real signal to the player.
+      const fuelPrice =
+        fuelType === "jet-a" ? a.fuelPriceJetA : a.fuelPriceAvgas;
+      return {
+        type: "Feature",
+        id: a.icao,
+        geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+        properties: {
+          icao: a.icao,
+          name: a.name,
+          size: a.size,
+          radius: SIZE_RADIUS[a.size],
+          radiusFuelOn: SIZE_RADIUS[a.size] * 1.3,
+          haloRadius: SIZE_RADIUS[a.size] + 6,
+          tierColor: SIZE_TIER_COLOR[a.size],
+          fuelPrice: fuelPrice ?? null,
+        },
+      };
+    }),
   };
 }
 
@@ -393,6 +406,7 @@ export function AtlasMap({
   jobFilters,
   onFeatureClick,
   onFilteredJobsChange,
+  fuelOverlayType = "jet-a",
 }: AtlasMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -492,7 +506,11 @@ export function AtlasMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    setSourceData(map, SRC_AIRPORTS, buildAirportFC(data.airports));
+    setSourceData(
+      map,
+      SRC_AIRPORTS,
+      buildAirportFC(data.airports, fuelOverlayType),
+    );
     setSourceData(map, SRC_FLIGHTS, buildFlightFC(data.recentFlights));
     setSourceData(map, SRC_OWNED, buildOwnedFC(data.ownedAircraft));
     setSourceData(map, SRC_JOBS_LINES, buildJobLineFC(data.jobs));
@@ -542,7 +560,7 @@ export function AtlasMap({
 
     if (map.getLayer(L_AIRPORT_CIRCLE)) {
       const colorExpr = visibleLayers.fuelPrices
-        ? buildFuelPriceColorExpr(data.airports)
+        ? buildFuelPriceColorExpr(data.airports, fuelOverlayType)
         : ["get", "tierColor"];
       map.setPaintProperty(L_AIRPORT_CIRCLE, "circle-color", colorExpr as never);
       map.setPaintProperty(
@@ -555,8 +573,17 @@ export function AtlasMap({
         "circle-stroke-opacity",
         visibleLayers.fuelPrices ? 0.4 : 0.9,
       );
+      // Bigger circles when the fuel overlay is on so the color is readable.
+      map.setPaintProperty(
+        L_AIRPORT_CIRCLE,
+        "circle-radius",
+        [
+          "get",
+          visibleLayers.fuelPrices ? "radiusFuelOn" : "radius",
+        ] as never,
+      );
     }
-  }, [visibleLayers, data.airports, ready]);
+  }, [visibleLayers, data.airports, ready, fuelOverlayType]);
 
   // ----- Apply job filters via setFilter (no data refetch needed) -----
   useEffect(() => {
@@ -1166,18 +1193,18 @@ function jobMatchesFilter(
   return true;
 }
 
-// Build a step expression from price percentiles in the current dataset.
-function buildFuelPriceColorExpr(airports: AtlasAirport[]): unknown {
-  const prices = airports
-    .map((a) => a.fuelPriceJetA ?? a.fuelPriceAvgas)
-    .filter((p): p is number => p != null)
-    .sort((a, b) => a - b);
-  if (prices.length === 0) return MAP_PALETTE.accent;
+// Build a step expression from the actual price range in the current dataset
+// for the chosen fuel type. Cheap = saturated green, median = neutral gray,
+// expensive = saturated red. Adapts to the live data so the gradient stretches
+// across whatever spread the player is looking at.
+function buildFuelPriceColorExpr(
+  airports: AtlasAirport[],
+  fuelType: "avgas" | "jet-a",
+): unknown {
+  const range = computeFuelPriceRange(airports, fuelType);
+  if (!range) return MAP_PALETTE.accent;
 
-  const lo = prices[0]!;
-  const mid = prices[Math.floor(prices.length / 2)]!;
-  const hi = prices[prices.length - 1]!;
-
+  const { lo, mid, hi } = range;
   return [
     "case",
     ["==", ["get", "fuelPrice"], null],
@@ -1189,11 +1216,46 @@ function buildFuelPriceColorExpr(airports: AtlasAirport[]): unknown {
       lo,
       "#5ec47c",
       mid,
-      "#c9b27a",
+      "#cfcfcf",
       hi,
-      "#e26464",
+      "#e34d4d",
     ],
   ];
+}
+
+export interface FuelPriceRange {
+  lo: number;
+  mid: number;
+  hi: number;
+}
+
+export function computeFuelPriceRange(
+  airports: AtlasAirport[],
+  fuelType: "avgas" | "jet-a",
+): FuelPriceRange | null {
+  const prices = airports
+    .map((a) => (fuelType === "jet-a" ? a.fuelPriceJetA : a.fuelPriceAvgas))
+    .filter((p): p is number => p != null)
+    .sort((a, b) => a - b);
+  if (prices.length === 0) return null;
+  const lo = prices[0]!;
+  const hi = prices[prices.length - 1]!;
+  // Use midpoint between min and max so the neutral midline lands on the
+  // numerical middle of the gradient (not skewed by a long tail of cheap or
+  // expensive outliers).
+  const mid = (lo + hi) / 2;
+  return { lo, mid, hi };
+}
+
+export function chooseFuelOverlayType(
+  ownedAircraft: AtlasOwnedAircraft[],
+): "avgas" | "jet-a" {
+  // If the player owns any jet-A consumer, color by jet-A. Otherwise avgas.
+  // Rental-only players get jet-A as the default since that's where serious
+  // operating expense lives.
+  if (ownedAircraft.some((a) => a.fuelType === "jet-a")) return "jet-a";
+  if (ownedAircraft.some((a) => a.fuelType === "avgas")) return "avgas";
+  return "jet-a";
 }
 
 function attachClickHandlers(

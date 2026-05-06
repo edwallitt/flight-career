@@ -224,6 +224,17 @@ export function MarketDrawer({
                   ago
                 </span>
               </Field>
+
+              <Field label="Fuel capacity">
+                <span className="tabular-nums">
+                  {Math.round(listing.fuelCapacityGal).toLocaleString()} gal
+                </span>
+              </Field>
+              <Field label="Fuel type" align="right">
+                <span className="font-mono text-[12px] uppercase tracking-callsign text-muted">
+                  {listing.fuelType === "jet-a" ? "Jet A" : "Avgas"}
+                </span>
+              </Field>
             </div>
 
             {listing.descriptionShort && (
