@@ -1,11 +1,15 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
+  aircraftListings,
   aircraftTypes,
   airports,
   career,
   clientState,
   flights,
+  fuelPriceCurrent,
+  fuelPriceSnapshots,
+  fuelShocks,
   jobs,
   loans,
   maintenanceEvents,
@@ -14,6 +18,7 @@ import {
   ratingExams,
   rentalFleet,
   reputation,
+  transfers,
 } from "../../db/schema.js";
 import { aircraftSeed } from "../../db/seed-data/aircraft.js";
 import { airportSeed } from "../../db/seed-data/airports.js";
@@ -46,15 +51,20 @@ export function resetTestDb(opts: ResetOptions = {}): void {
   try {
     db.delete(flights).run();
     db.delete(maintenanceEvents).run();
+    db.delete(transfers).run();
     db.delete(loans).run();
     db.delete(ratingExams).run();
     db.delete(rentalFleet).run();
     db.delete(jobs).run();
+    db.delete(aircraftListings).run();
     db.delete(ownedAircraft).run();
     db.delete(career).run();
     db.delete(clientState).run();
     db.delete(reputation).run();
     db.delete(ratings).run();
+    db.delete(fuelPriceSnapshots).run();
+    db.delete(fuelShocks).run();
+    db.delete(fuelPriceCurrent).run();
   } finally {
     db.run(sql`PRAGMA foreign_keys = ON`);
   }
@@ -232,4 +242,56 @@ export function insertOwnedAircraft(
 /** Read the singleton career row. Tests use this constantly. */
 export function getCareer(): typeof career.$inferSelect {
   return db.select().from(career).where(eq(career.id, 1)).get()!;
+}
+
+export interface InsertFlightInput {
+  jobId?: number | null;
+  ownedAircraftId?: number | null;
+  rentalAircraftTypeId?: string | null;
+  originIcao?: string;
+  destinationIcao?: string;
+  startedAt?: number;
+  endedAt?: number;
+  blockTimeMinutes?: number;
+  fuelBurnedGal?: number;
+  totalCost?: number;
+  totalRevenue?: number;
+  outcome?: "completed" | "diverted" | "failed";
+  notes?: string | null;
+}
+
+/**
+ * Insert a flight-log row directly. Bypasses the lifecycle service so tests
+ * for read-side aggregations (logbook) can quickly seed flight history.
+ */
+export function insertFlight(
+  input: InsertFlightInput = {},
+): typeof flights.$inferSelect {
+  const now =
+    db.select().from(career).where(eq(career.id, 1)).get()?.simDateTime ??
+    Date.UTC(2026, 0, 1);
+  const startedAt = input.startedAt ?? now;
+  const endedAt = input.endedAt ?? startedAt + 60 * 60_000;
+
+  db.insert(flights)
+    .values({
+      jobId: input.jobId ?? null,
+      ownedAircraftId: input.ownedAircraftId ?? null,
+      rentalAircraftTypeId:
+        input.rentalAircraftTypeId ??
+        (input.ownedAircraftId == null ? "bonanza_g36" : null),
+      originIcao: input.originIcao ?? "CYHZ",
+      destinationIcao: input.destinationIcao ?? "CYCH",
+      startedAt,
+      endedAt,
+      blockTimeMinutes: input.blockTimeMinutes ?? 60,
+      fuelBurnedGal: input.fuelBurnedGal ?? 17,
+      totalCost: input.totalCost ?? 5000,
+      totalRevenue: input.totalRevenue ?? 50_000,
+      outcome: input.outcome ?? "completed",
+      notes: input.notes ?? null,
+    })
+    .run();
+
+  return db.select().from(flights).orderBy(flights.id).all().at(-1)!;
 }
