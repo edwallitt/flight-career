@@ -4,7 +4,7 @@ import {
   type AircraftClass,
   type MaintenanceType,
 } from "@flightcareer/shared";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -173,7 +173,7 @@ function buildDetail(
     hoursSinceAnnual: owned.hoursSinceAnnual,
     annualDueAt: owned.annualDueAt,
     fuelOnBoardGal: owned.fuelOnBoardGal,
-    status: owned.status,
+    status: owned.status as Exclude<typeof owned.status, "sold">,
     purchasedAt: owned.purchasedAt,
     purchasePriceCents: owned.purchasePrice,
 
@@ -238,6 +238,7 @@ export function getOwnedAircraft(): OwnedAircraftDetail[] {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
+    .where(ne(ownedAircraft.status, "sold"))
     .all();
   if (rows.length === 0) return [];
 
@@ -281,7 +282,7 @@ export function getOwnedAircraftById(id: number): OwnedAircraftDetail | null {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
-    .where(eq(ownedAircraft.id, id))
+    .where(and(eq(ownedAircraft.id, id), ne(ownedAircraft.status, "sold")))
     .get();
   if (!row) return null;
 

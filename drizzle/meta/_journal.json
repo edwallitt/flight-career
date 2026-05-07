@@ -99,6 +99,13 @@
       "when": 1778184099083,
       "tag": "0013_quiet_drift",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1778147686304,
+      "tag": "0014_secret_the_stranger",
+      "breakpoints": true
     }
   ]
 }

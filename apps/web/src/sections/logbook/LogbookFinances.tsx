@@ -83,6 +83,11 @@ export function LogbookFinances() {
                   cents={data.byCategory.flightRevenue}
                   positive
                 />
+                <LedgerLine
+                  label="Aircraft sales"
+                  cents={data.byCategory.aircraftSales}
+                  positive
+                />
               </LedgerSection>
 
               <LedgerSection heading="Costs">

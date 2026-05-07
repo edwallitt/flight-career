@@ -1,5 +1,5 @@
 import { ALL_CLIENTS } from "@flightcareer/shared";
-import { desc, eq, gte } from "drizzle-orm";
+import { desc, eq, gte, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -134,6 +134,7 @@ export function getAtlasData(): AtlasData {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
+    .where(ne(ownedAircraft.status, "sold"))
     .all();
 
   const atlasOwned: AtlasOwnedAircraft[] = ownedRows.map(({ owned, type, ap }) => ({
@@ -145,7 +146,7 @@ export function getAtlasData(): AtlasData {
     currentLocationName: ap.name,
     lat: ap.lat,
     lon: ap.lon,
-    status: owned.status,
+    status: owned.status as Exclude<typeof owned.status, "sold">,
     airframeHours: owned.airframeHours,
     engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
     tboHours: type.tboHours,

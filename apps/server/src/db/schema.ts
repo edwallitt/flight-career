@@ -139,7 +139,7 @@ export const ownedAircraft = sqliteTable("owned_aircraft", {
   annualDueAt: integer("annual_due_at").notNull(),
   fuelOnBoardGal: real("fuel_on_board_gal").notNull(),
   status: text("status", {
-    enum: ["available", "in_maintenance", "in_flight", "committed"],
+    enum: ["available", "in_maintenance", "in_flight", "committed", "sold"],
   }).notNull(),
   purchasedAt: integer("purchased_at").notNull(),
   purchasePrice: integer("purchase_price").notNull(),
@@ -148,6 +148,10 @@ export const ownedAircraft = sqliteTable("owned_aircraft", {
   // On purchase, set to purchasedAt + 30 sim days. processMonthlyOwnership
   // walks forward 30 days at a time until the timestamp is in the future.
   nextMonthlyCostAt: integer("next_monthly_cost_at").notNull().default(0),
+  // Set when the player sells the aircraft. Sim-time timestamp; null while
+  // owned. Sold rows are retained for the Past Aircraft history.
+  soldAt: integer("sold_at"),
+  salePriceCents: integer("sale_price_cents"),
 });
 
 export const loans = sqliteTable("loans", {

@@ -10,7 +10,7 @@ import {
   type JobReachability,
   type Role,
 } from "@flightcareer/shared";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -299,6 +299,7 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     .select({ owned: ownedAircraft, type: aircraftTypes })
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
+    .where(ne(ownedAircraft.status, "sold"))
     .all();
   const ownedAircraftCtx = ownedRows.map(({ owned, type }) => ({
     aircraftTypeId: type.id,

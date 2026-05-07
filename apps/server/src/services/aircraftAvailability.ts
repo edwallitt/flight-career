@@ -8,7 +8,7 @@ import {
   type RankedCandidate,
   haversineNm,
 } from "@flightcareer/shared";
-import { eq, inArray, or } from "drizzle-orm";
+import { eq, inArray, ne, or } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -120,10 +120,12 @@ function loadCandidates(
   playerLocationIcao: string,
 ): AircraftCandidate[] {
   // Owned aircraft, joined with their type. Available means status === 'available'.
+  // Sold aircraft are excluded — they no longer exist as dispatchable assets.
   const ownedRows = db
     .select({ owned: ownedAircraft, type: aircraftTypes })
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
+    .where(ne(ownedAircraft.status, "sold"))
     .all();
 
   const owned: AircraftCandidate[] = ownedRows.map(({ owned, type }) => ({
@@ -231,9 +233,13 @@ export async function getCandidatesForJob(
   // aircraft past hard limits.
   const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
   const simNow = careerRow?.simDateTime ?? Date.now();
-  const ownedRows = db.select().from(ownedAircraft).all();
+  const allOwnedRows = db
+    .select()
+    .from(ownedAircraft)
+    .where(ne(ownedAircraft.status, "sold"))
+    .all();
   const ownedById = new Map<number, typeof ownedAircraft.$inferSelect>();
-  for (const o of ownedRows) ownedById.set(o.id, o);
+  for (const o of allOwnedRows) ownedById.set(o.id, o);
 
   const rankedWithDisplay: RankedCandidateWithDisplay[] = ranked.map((r) => {
     const display = displayByTypeId.get(r.candidate.aircraftTypeId) ?? {

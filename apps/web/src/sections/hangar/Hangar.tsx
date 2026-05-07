@@ -5,6 +5,8 @@ import { formatCash } from "../../lib/formatters.js";
 import { FleetCard } from "./FleetCard.js";
 import { HangarDrawer } from "./HangarDrawer.js";
 import { MaintenanceModal } from "./MaintenanceModal.js";
+import { SaleModal } from "./SaleModal.js";
+import { PastAircraftSection } from "./PastAircraftSection.js";
 
 export function Hangar() {
   const navigate = useNavigate();
@@ -14,6 +16,11 @@ export function Hangar() {
     | { id: number; highlight?: MaintenanceHighlight }
     | null
   >(null);
+  const [saleId, setSaleId] = useState<number | null>(null);
+  const [saleResult, setSaleResult] = useState<{
+    tailNumber: string;
+    netReceivedCents: number;
+  } | null>(null);
 
   const fleetQuery = trpc.hangar.fleet.useQuery(undefined, {
     refetchInterval: 15_000,
@@ -85,26 +92,30 @@ export function Hangar() {
           ) : fleet.length === 0 ? (
             <EmptyState onBrowse={() => navigate("/market")} />
           ) : (
-            <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
-              {fleet.map((a) => (
-                <FleetCard
-                  key={a.id}
-                  aircraft={a}
-                  onInspect={() => setInspectId(a.id)}
-                  onMaintenance={(highlight) =>
-                    setMaintenance({ id: a.id, highlight })
-                  }
-                  simNow={simNow}
-                  isSelected={inspectId === a.id}
-                />
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-1 gap-5 2xl:grid-cols-2">
+                {fleet.map((a) => (
+                  <FleetCard
+                    key={a.id}
+                    aircraft={a}
+                    onInspect={() => setInspectId(a.id)}
+                    onMaintenance={(highlight) =>
+                      setMaintenance({ id: a.id, highlight })
+                    }
+                    simNow={simNow}
+                    isSelected={inspectId === a.id}
+                  />
+                ))}
+              </div>
+              <PastAircraftSection />
+            </>
           )}
         </div>
 
         <HangarDrawer
           aircraftId={inspectId}
           onClose={() => setInspectId(null)}
+          onRequestSell={(id) => setSaleId(id)}
         />
       </div>
 
@@ -114,6 +125,33 @@ export function Hangar() {
           highlightType={maintenance.highlight}
           onClose={() => setMaintenance(null)}
         />
+      )}
+
+      {saleId != null && (
+        <SaleModal
+          ownedAircraftId={saleId}
+          onClose={() => setSaleId(null)}
+          onSold={(result) => {
+            setSaleId(null);
+            setInspectId(null);
+            setSaleResult({
+              tailNumber: result.tailNumber,
+              netReceivedCents: result.netReceivedCents,
+            });
+            window.setTimeout(() => setSaleResult(null), 4000);
+          }}
+        />
+      )}
+
+      {saleResult && (
+        <div className="pointer-events-none absolute bottom-6 left-1/2 -translate-x-1/2 rounded-sm border border-amber-deep bg-ink-800/95 px-5 py-3 font-mono text-[12px] uppercase tracking-callsign text-amber-glow shadow-2xl">
+          Sold {saleResult.tailNumber} ·{" "}
+          <span className="text-text-high">
+            {saleResult.netReceivedCents >= 0 ? "+" : "−"}
+            {formatCash(Math.abs(saleResult.netReceivedCents))}
+          </span>{" "}
+          to cash
+        </div>
       )}
     </div>
   );

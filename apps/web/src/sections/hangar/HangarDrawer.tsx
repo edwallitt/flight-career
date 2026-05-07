@@ -94,9 +94,11 @@ function projectPaymentSchedule(
 export function HangarDrawer({
   aircraftId,
   onClose,
+  onRequestSell,
 }: {
   aircraftId: number | null;
   onClose: () => void;
+  onRequestSell: (id: number) => void;
 }) {
   const open = aircraftId != null;
   const utils = trpc.useUtils();
@@ -427,10 +429,9 @@ export function HangarDrawer({
         </button>
         <button
           type="button"
-          onClick={() =>
-            window.alert("Selling aircraft is not yet implemented.")
-          }
-          className="flex-1 rounded-sm border border-ink-600 bg-ink-750 py-3 font-mono text-[12px] uppercase tracking-callsign text-muted hover:text-text-high"
+          disabled={!aircraft}
+          onClick={() => aircraft && onRequestSell(aircraft.id)}
+          className="flex-1 rounded-sm border border-ink-600 bg-ink-750 py-3 font-mono text-[12px] uppercase tracking-callsign text-muted hover:text-text-high disabled:cursor-not-allowed disabled:opacity-40"
         >
           Sell aircraft
         </button>

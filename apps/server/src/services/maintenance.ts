@@ -9,7 +9,7 @@ import {
   type MaintenanceType,
   type MaintenanceTypeSpec,
 } from "@flightcareer/shared";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, lte, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -154,10 +154,17 @@ export function getAvailableMaintenance(input: {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
-    .where(eq(ownedAircraft.id, input.ownedAircraftId))
+    .where(
+      and(
+        eq(ownedAircraft.id, input.ownedAircraftId),
+        ne(ownedAircraft.status, "sold"),
+      ),
+    )
     .get();
   if (!row) return null;
   const { owned, type, ap } = row;
+  // Filter narrows owned.status to the operational set.
+  const ownedStatus = owned.status as Exclude<typeof owned.status, "sold">;
 
   // In-progress event (if any) — we surface the active one rather than
   // offering further bookings while work is happening.
@@ -205,7 +212,7 @@ export function getAvailableMaintenance(input: {
     const eligibility = checkMaintenanceEligibility(t, {
       aircraft: {
         currentLocationIcao: owned.currentLocationIcao,
-        status: owned.status,
+        status: ownedStatus,
         hoursSince100hr: owned.hoursSince100hr,
         hoursSinceAnnual: owned.hoursSinceAnnual,
         engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
@@ -266,6 +273,9 @@ export function bookMaintenance(input: {
       .where(eq(ownedAircraft.id, input.ownedAircraftId))
       .get();
     if (!owned) return { ok: false, error: "Aircraft not found" };
+    if (owned.status === "sold") {
+      return { ok: false, error: "Aircraft has already been sold" };
+    }
 
     const type = tx
       .select()
@@ -298,7 +308,7 @@ export function bookMaintenance(input: {
     const eligibility = checkMaintenanceEligibility(input.type, {
       aircraft: {
         currentLocationIcao: owned.currentLocationIcao,
-        status: owned.status,
+        status: owned.status as Exclude<typeof owned.status, "sold">,
         hoursSince100hr: owned.hoursSince100hr,
         hoursSinceAnnual: owned.hoursSinceAnnual,
         engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
@@ -457,7 +467,12 @@ export function processMonthlyOwnership(): MonthlyOwnershipResult {
     .select({ owned: ownedAircraft, type: aircraftTypes })
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
-    .where(lte(ownedAircraft.nextMonthlyCostAt, simNow))
+    .where(
+      and(
+        lte(ownedAircraft.nextMonthlyCostAt, simNow),
+        ne(ownedAircraft.status, "sold"),
+      ),
+    )
     .all();
   if (due.length === 0) return { applied: 0, totalDeductedCents: 0 };
 

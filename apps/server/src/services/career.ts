@@ -6,7 +6,7 @@ import {
   type EligibilityCheck,
   type Role,
 } from "@flightcareer/shared";
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, lte, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   career,
@@ -292,8 +292,12 @@ export function getCareerSnapshot(): CareerSnapshotFull | null {
   }
   byClient.sort((a, b) => b.score - a.score || b.flightCount - a.flightCount);
 
-  // Milestones
-  const ownedCount = db.select().from(ownedAircraft).all().length;
+  // Milestones — count only live (not sold) aircraft.
+  const ownedCount = db
+    .select()
+    .from(ownedAircraft)
+    .where(ne(ownedAircraft.status, "sold"))
+    .all().length;
   let totalBlock = 0;
   let totalEarnings = 0;
   let totalDistanceNm = 0;

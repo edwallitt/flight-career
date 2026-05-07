@@ -79,6 +79,7 @@ export interface FinancialSummary {
     flightCosts: number;
     travelCosts: number;
     aircraftPurchases: number;
+    aircraftSales: number;
     loanPayments: number;
     maintenanceCosts: number;
   };
@@ -328,6 +329,26 @@ export function getFinancialSummary(input?: {
     }
   }
 
+  // Aircraft sales — gross proceeds (post-broker-spread) for any aircraft
+  // sold in the window. Net to player is sale − loan payoff, but loan
+  // payments are already accounted for separately, so we count gross here
+  // to avoid double-discounting the loan retirement.
+  const soldRows = db
+    .select()
+    .from(ownedAircraft)
+    .where(
+      and(
+        gte(ownedAircraft.soldAt, from),
+        lte(ownedAircraft.soldAt, to),
+        eq(ownedAircraft.status, "sold"),
+      ),
+    )
+    .all();
+  let aircraftSales = 0;
+  for (const o of soldRows) {
+    aircraftSales += o.salePriceCents ?? 0;
+  }
+
   let loanPayments = 0;
   for (const loan of allLoans) {
     loanPayments += loan.monthlyPayment * loan.paymentsMade;
@@ -339,7 +360,7 @@ export function getFinancialSummary(input?: {
     maintenanceCosts += m.cost;
   }
 
-  const totalRevenue = flightRevenue;
+  const totalRevenue = flightRevenue + aircraftSales;
   const totalCosts =
     flightCosts +
     travelCosts +
@@ -376,6 +397,7 @@ export function getFinancialSummary(input?: {
       flightCosts,
       travelCosts,
       aircraftPurchases,
+      aircraftSales,
       loanPayments,
       maintenanceCosts,
     },

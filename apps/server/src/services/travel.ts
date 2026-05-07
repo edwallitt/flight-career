@@ -5,7 +5,7 @@ import {
   type TransferInputs,
   type TransferType,
 } from "@flightcareer/shared";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -299,6 +299,7 @@ export function listOwnedAircraftForTransfer(): OwnedAircraftForTransfer[] {
     .from(ownedAircraft)
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .innerJoin(airports, eq(ownedAircraft.currentLocationIcao, airports.icao))
+    .where(ne(ownedAircraft.status, "sold"))
     .all();
   return rows.map(({ owned, type, ap }) => ({
     id: owned.id,
@@ -307,7 +308,7 @@ export function listOwnedAircraftForTransfer(): OwnedAircraftForTransfer[] {
     manufacturer: type.manufacturer,
     model: type.model,
     cls: type.class,
-    status: owned.status,
+    status: owned.status as Exclude<typeof owned.status, "sold">,
     currentLocationIcao: owned.currentLocationIcao,
     currentLocationName: ap.name,
   }));
