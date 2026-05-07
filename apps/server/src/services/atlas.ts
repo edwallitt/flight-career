@@ -118,10 +118,10 @@ export function getAtlasData(): AtlasData {
     size: a.size,
     longestRunwayFt: a.longestRunwayFt,
     fuelPriceAvgas: a.hasAvgas
-      ? fuelPriceCentsPerGal("avgas", a.baseFuelMultiplier)
+      ? fuelPriceCentsPerGal("avgas", a.icao, a.baseFuelMultiplier)
       : null,
     fuelPriceJetA: a.hasJetA
-      ? fuelPriceCentsPerGal("jet-a", a.baseFuelMultiplier)
+      ? fuelPriceCentsPerGal("jet-a", a.icao, a.baseFuelMultiplier)
       : null,
     hasMaintenance: a.hasMaintenance,
     hasFbo: a.hasFbo,

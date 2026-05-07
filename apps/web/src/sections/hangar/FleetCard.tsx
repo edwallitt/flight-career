@@ -183,6 +183,34 @@ export function FleetCard({
     fuelNeededGal > 0 &&
     !refuelMutation.isPending;
 
+  // 14-day price trend at the aircraft's current location. Compared against
+  // the *current* live price (aircraft.fuelPriceCentsPerGal) to give the
+  // player a hint about whether to fill up here or wait. Skipped when the
+  // airport doesn't sell this fuel — the button is disabled in that case.
+  const fuelHistoryQuery = trpc.fuel.priceHistory.useQuery(
+    {
+      airportIcao: aircraft.currentLocationIcao,
+      fuelType: aircraft.fuelType,
+      windowDays: 14,
+    },
+    {
+      enabled: aircraft.locationHasFuel,
+      staleTime: 30_000,
+    },
+  );
+  const trendGlyph = (() => {
+    if (!aircraft.locationHasFuel) return null;
+    const points = fuelHistoryQuery.data ?? [];
+    if (points.length < 2) return null;
+    const avg =
+      points.reduce((s, p) => s + p.priceCents, 0) / points.length;
+    if (avg <= 0) return null;
+    const pct = ((aircraft.fuelPriceCentsPerGal - avg) / avg) * 100;
+    if (pct > 2) return { glyph: "↗", tone: "text-urgency-urgent" };
+    if (pct < -2) return { glyph: "↘", tone: "text-emerald-300" };
+    return { glyph: "→", tone: "text-muted" };
+  })();
+
   const refuelDisabledReason = !aircraft.locationHasFuel
     ? `No ${aircraft.fuelType.toUpperCase()} here`
     : aircraft.status !== "available"
@@ -414,11 +442,24 @@ export function FleetCard({
           }
           className="flex-1 rounded-sm border border-amber-deep bg-amber-glow/[0.08] py-2 font-mono text-[11px] uppercase tracking-callsign text-amber-glow transition-colors hover:bg-amber-glow/[0.16] hover:text-amber-warm disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {refuelMutation.isPending
-            ? "Refueling…"
-            : refuelDisabledReason
-              ? `Refuel · ${refuelDisabledReason}`
-              : `Refuel · ${formatCash(refuelCost)}`}
+          {refuelMutation.isPending ? (
+            "Refueling…"
+          ) : refuelDisabledReason ? (
+            `Refuel · ${refuelDisabledReason}`
+          ) : (
+            <>
+              {`Refuel · ${formatCash(refuelCost)}`}
+              {trendGlyph && (
+                <span
+                  className={["ml-1.5", trendGlyph.tone].join(" ")}
+                  aria-label="Local fuel price vs 14-day average"
+                  title="Local fuel price vs 14-day average"
+                >
+                  {trendGlyph.glyph}
+                </span>
+              )}
+            </>
+          )}
         </button>
         <button
           type="button"

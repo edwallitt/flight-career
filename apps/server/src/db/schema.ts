@@ -350,3 +350,68 @@ export const fuelPriceSnapshots = sqliteTable(
   }),
 );
 
+// =============================================================================
+// Fuel price drift state
+// =============================================================================
+//
+// Two tables work together to model live fuel pricing:
+//   * fuel_price_current — one row per (airport, fuel_type) holding the *live*
+//     price. Read by every fuel-cost path (refuel, brief, atlas, completion).
+//   * fuel_shocks — narrative events that scale prices for a window of ticks.
+//     `status='active'` rows decrement ticks_remaining each drift tick.
+//
+// fuel_price_snapshots remains the append-only history. Sparkline queries hit
+// it directly; the index on (airport, fuel_type, effective_at) is provided by
+// the existing primary key.
+
+export const fuelShocks = sqliteTable("fuel_shocks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  type: text("type", {
+    enum: [
+      "supply_tightness",
+      "glut",
+      "refinery_outage",
+      "transport_disruption",
+    ],
+  }).notNull(),
+  severity: text("severity", {
+    enum: ["mild", "moderate", "severe"],
+  }).notNull(),
+  // Multiplier applied to the underlying drift output for affected airports.
+  // 1.0 = no effect; >1 = price up; <1 = price down.
+  multiplier: real("multiplier").notNull(),
+  affectsFuelType: text("affects_fuel_type", {
+    enum: ["avgas", "jet-a", "both"],
+  }).notNull(),
+  affectsRegion: text("affects_region").notNull(),
+  durationTicks: integer("duration_ticks").notNull(),
+  ticksRemaining: integer("ticks_remaining").notNull(),
+  startedAt: integer("started_at").notNull(),
+  description: text("description").notNull(),
+  headline: text("headline").notNull(),
+  status: text("status", { enum: ["active", "expired"] }).notNull(),
+});
+
+export const fuelPriceCurrent = sqliteTable(
+  "fuel_price_current",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    airportIcao: text("airport_icao")
+      .notNull()
+      .references(() => airports.icao),
+    fuelType: text("fuel_type", { enum: ["avgas", "jet-a"] }).notNull(),
+    currentPriceCents: integer("current_price_cents").notNull(),
+    basePriceCents: integer("base_price_cents").notNull(),
+    lastDriftAt: integer("last_drift_at").notNull(),
+    currentShockId: integer("current_shock_id").references(
+      (): AnySQLiteColumn => fuelShocks.id,
+    ),
+  },
+  (t) => ({
+    airportFuelUnique: uniqueIndex("fuel_price_current_airport_fuel_unique").on(
+      t.airportIcao,
+      t.fuelType,
+    ),
+  }),
+);
+

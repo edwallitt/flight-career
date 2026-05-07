@@ -30,16 +30,16 @@ import {
   reputation,
 } from "../db/schema.js";
 
+import { fuelPriceCentsPerGal as livePriceCentsPerGal } from "./fuelDrift.js";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-// Placeholder fuel pricing until the price simulation lands. Cents per gallon,
-// before the airport's baseFuelMultiplier is applied.
-const BASE_PRICE_CENTS_PER_GAL: Record<"avgas" | "jet-a", number> = {
-  avgas: 700,
-  "jet-a": 550,
-};
+//
+// Fuel pricing is now sourced from fuel_price_current via the fuelDrift
+// service. The exported `fuelPriceCentsPerGal` below is a thin compatibility
+// shim — it delegates to the drift service while preserving the call sites
+// across travel, atlas, hangar, and lifecycle.
 
 export const REP_HIT_BY_STATE = {
   accepted: { role: -2, client: -3 },
@@ -507,10 +507,12 @@ export function activeAircraftType(
 
 export function fuelPriceCentsPerGal(
   fuelType: "avgas" | "jet-a",
+  airportIcao: string,
   baseFuelMultiplier: number,
 ): number {
-  // Round to nearest cent — matches "round to 2 decimals" in dollar terms.
-  return Math.round(BASE_PRICE_CENTS_PER_GAL[fuelType] * baseFuelMultiplier);
+  // Reads from fuel_price_current; falls back to the static formula if the
+  // drift table hasn't been seeded yet.
+  return livePriceCentsPerGal(fuelType, airportIcao, baseFuelMultiplier);
 }
 
 const BLOCK_TIME_RESERVE_FACTOR = 1.45;
@@ -673,6 +675,7 @@ export function briefJob(input: BriefJobInput): BriefResult {
 
     const pricePerGal = fuelPriceCentsPerGal(
       typeRow.fuelType,
+      originRow.icao,
       originRow.baseFuelMultiplier,
     );
     const fuelCostCents = Math.round(input.fuelGallons * pricePerGal);
@@ -946,6 +949,7 @@ export function getActiveJob(): ActiveJobSnapshot | null {
     briefedFuelCostCents: careerRow.briefedFuelCostCents ?? null,
     fuelPriceCentsPerGal: fuelPriceCentsPerGal(
       typeRow.fuelType,
+      origin.icao,
       origin.baseFuelMultiplier,
     ),
     recommendedFuelGallons: recommended,
@@ -1195,7 +1199,7 @@ export function completeFlightAction(
       careerRow.activeAircraftSource === "owned" &&
       (typeRow.fuelType === "jet-a" ? destRow.hasJetA : destRow.hasAvgas);
     const destFuelPrice = refuelAtDestination
-      ? fuelPriceCentsPerGal(typeRow.fuelType, destRow.baseFuelMultiplier)
+      ? fuelPriceCentsPerGal(typeRow.fuelType, destRow.icao, destRow.baseFuelMultiplier)
       : 0;
 
     const completionInput: CompleteFlightInput = {

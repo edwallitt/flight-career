@@ -197,7 +197,7 @@ function buildDetail(
     locationName: airport.name,
     locationHasFuel,
     fuelPriceCentsPerGal: locationHasFuel
-      ? fuelPriceCentsPerGal(type.fuelType, airport.baseFuelMultiplier)
+      ? fuelPriceCentsPerGal(type.fuelType, airport.icao, airport.baseFuelMultiplier)
       : 0,
 
     loan: loanInfo,
@@ -367,6 +367,7 @@ export function refuelOwnedAircraft(aircraftId: number): RefuelOutcome {
 
     const pricePerGal = fuelPriceCentsPerGal(
       type.fuelType,
+      airport.icao,
       airport.baseFuelMultiplier,
     );
     const costCents = Math.round(needed * pricePerGal);

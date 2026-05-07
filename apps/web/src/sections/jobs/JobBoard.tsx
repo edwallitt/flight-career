@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../../trpc.js";
+import { FuelShockBanner } from "./FuelShockBanner.js";
 import { JobDrawer } from "./JobDrawer.js";
 import { JobFilters } from "./JobFilters.js";
 import { JobTable } from "./JobTable.js";
@@ -106,6 +107,8 @@ export function JobBoard() {
           )}
         </div>
       </div>
+
+      <FuelShockBanner />
 
       <JobFilters
         roleFilter={roleFilter}

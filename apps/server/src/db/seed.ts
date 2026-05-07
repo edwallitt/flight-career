@@ -11,6 +11,7 @@ import {
 } from "./schema.js";
 import { aircraftSeed } from "./seed-data/aircraft.js";
 import { airportSeed } from "./seed-data/airports.js";
+import { ensureFuelPriceCurrent } from "../services/fuelDrift.js";
 import { refreshMarketplace, rngFromSeed } from "../services/marketplace.js";
 
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
@@ -135,6 +136,13 @@ async function seed() {
   if (existingListings === 0) {
     refreshMarketplace(24, rngFromSeed(0x5eed_0001));
   }
+
+  // Fuel-price drift state. Idempotent — only inserts (airport, fuel_type)
+  // combinations that don't already exist.
+  const careerSimNow =
+    db.select({ simDateTime: career.simDateTime }).from(career).where(eq(career.id, 1)).get()
+      ?.simDateTime ?? now;
+  ensureFuelPriceCurrent(careerSimNow);
 
   const counts = {
     aircraftTypes: db.select().from(aircraftTypes).all().length,

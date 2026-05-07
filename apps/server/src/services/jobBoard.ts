@@ -16,12 +16,18 @@ import {
   aircraftTypes,
   airports,
   career,
+  fuelPriceCurrent,
   jobs,
   ownedAircraft,
   ratings,
   rentalFleet,
   reputation,
 } from "../db/schema.js";
+import {
+  DRIFT_INTERVAL_MS,
+  ensureFuelPriceCurrent,
+  processFuelDriftTick,
+} from "./fuelDrift.js";
 
 const TARGET_BOARD_SIZE = 12;
 const SIM_MINUTES_PER_TICK = 30;
@@ -163,12 +169,70 @@ function backfillZeroDistance(simNow: number): number {
 export interface TickResult {
   expired: number;
   inserted: number;
+  fuelDrift: {
+    fired: boolean;
+    airportsUpdated: number;
+    snapshotsCreated: number;
+    shockSpawned: boolean;
+    shocksExpired: number;
+  };
+}
+
+// Fire fuelDrift any time enough sim time has elapsed since the last drift
+// (6 sim hours = 12 generation ticks). Reads max(lastDriftAt) from the table
+// to stay decoupled from any in-memory counters.
+function maybeRunFuelDrift(simNow: number): TickResult["fuelDrift"] {
+  ensureFuelPriceCurrent(simNow);
+  const rows = db
+    .select({ lastDriftAt: fuelPriceCurrent.lastDriftAt })
+    .from(fuelPriceCurrent)
+    .all();
+  if (rows.length === 0) {
+    return {
+      fired: false,
+      airportsUpdated: 0,
+      snapshotsCreated: 0,
+      shockSpawned: false,
+      shocksExpired: 0,
+    };
+  }
+  const latest = rows.reduce(
+    (m, r) => (r.lastDriftAt > m ? r.lastDriftAt : m),
+    0,
+  );
+  if (simNow - latest < DRIFT_INTERVAL_MS) {
+    return {
+      fired: false,
+      airportsUpdated: 0,
+      snapshotsCreated: 0,
+      shockSpawned: false,
+      shocksExpired: 0,
+    };
+  }
+  const result = processFuelDriftTick(simNow);
+  return {
+    fired: true,
+    airportsUpdated: result.airportsUpdated,
+    snapshotsCreated: result.snapshotsCreated,
+    shockSpawned: result.shockEvent != null,
+    shocksExpired: result.shocksExpired,
+  };
 }
 
 export function tickJobGeneration(): TickResult {
   const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
   if (!careerRow) {
-    return { expired: 0, inserted: 0 };
+    return {
+      expired: 0,
+      inserted: 0,
+      fuelDrift: {
+        fired: false,
+        airportsUpdated: 0,
+        snapshotsCreated: 0,
+        shockSpawned: false,
+        shocksExpired: 0,
+      },
+    };
   }
 
   // Advance sim clock by 30 simulated minutes per tick. Without this, jobs
@@ -178,6 +242,7 @@ export function tickJobGeneration(): TickResult {
 
   const expired = expireStaleJobs(simNow);
   backfillZeroDistance(simNow);
+  const fuelDrift = maybeRunFuelDrift(simNow);
 
   const airportsLite = buildAirportsLite();
   const generated = runGenerationTick(ALL_CLIENTS, {
@@ -192,7 +257,7 @@ export function tickJobGeneration(): TickResult {
 
   insertGenerated(generated);
 
-  return { expired, inserted: generated.length };
+  return { expired, inserted: generated.length, fuelDrift };
 }
 
 export interface JobListItem {

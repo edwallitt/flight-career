@@ -2,6 +2,7 @@ import { aircraftRouter } from "./routers/aircraft.js";
 import { airportsRouter } from "./routers/airports.js";
 import { atlasRouter } from "./routers/atlas.js";
 import { careerRouter } from "./routers/career.js";
+import { fuelRouter } from "./routers/fuel.js";
 import { hangarRouter } from "./routers/hangar.js";
 import { healthRouter } from "./routers/health.js";
 import { jobsRouter } from "./routers/jobs.js";
@@ -27,6 +28,7 @@ export const appRouter = router({
   atlas: atlasRouter,
   maintenance: maintenanceRouter,
   sale: saleRouter,
+  fuel: fuelRouter,
 });
 
 export type AppRouter = typeof appRouter;

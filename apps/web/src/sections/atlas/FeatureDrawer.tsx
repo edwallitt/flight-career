@@ -11,6 +11,7 @@ import {
   formatSimDateTime,
   ROLE_LABEL,
 } from "../../lib/formatters.js";
+import { FuelSparkline } from "./FuelSparkline.js";
 
 interface FeatureDrawerProps {
   feature: AtlasFeatureRef | null;
@@ -186,11 +187,25 @@ function AirportDrawer({
           <span className="label">Fuel</span>
           <span className="h-px flex-1 bg-ink-600" />
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2">
-          <Field label="Avgas">{formatFuelPrice(airport.fuelPriceAvgas)}</Field>
-          <Field label="Jet A" align="right">
-            {formatFuelPrice(airport.fuelPriceJetA)}
-          </Field>
+        <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="label">Avgas</span>
+            <span className="font-mono text-[12px] text-text-high">
+              {formatFuelPrice(airport.fuelPriceAvgas)}
+            </span>
+            {airport.fuelPriceAvgas != null && (
+              <FuelSparkline airportIcao={airport.icao} fuelType="avgas" />
+            )}
+          </div>
+          <div className="flex flex-col items-end gap-0.5 text-right">
+            <span className="label">Jet A</span>
+            <span className="font-mono text-[12px] text-text-high">
+              {formatFuelPrice(airport.fuelPriceJetA)}
+            </span>
+            {airport.fuelPriceJetA != null && (
+              <FuelSparkline airportIcao={airport.icao} fuelType="jet-a" />
+            )}
+          </div>
         </div>
       </div>
 

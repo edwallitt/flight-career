@@ -138,6 +138,7 @@ function resolveContext(req: TransferRequest): ResolvedContext | { error: string
     inputs.aircraftClass = typeRow.class;
     inputs.destinationFuelPriceCents = fuelPriceCentsPerGal(
       typeRow.fuelType,
+      destRow.icao,
       destRow.baseFuelMultiplier,
     );
     inputs.destinationLandingFeeCents = destRow.baseLandingFee;
