@@ -26,6 +26,16 @@ export interface GenerationContext {
   rng: () => number;
   currentBoardSize: number;
   targetBoardSize: number;
+  // Player's current airport. When set, the generator forces at least one
+  // open-market job per tick to depart from here whenever the projected
+  // board would otherwise have zero home-origin jobs. Without this, the
+  // open-market origin bias (which de-weights majors) leaves players at
+  // big airports stranded with no eligible work.
+  playerLocationIcao?: string;
+  // Count of jobs already on the board that depart from playerLocationIcao.
+  // Used together with `playerLocationIcao` to decide whether the home-job
+  // guarantee needs to fire this tick.
+  homeOriginJobCount?: number;
 }
 
 export interface GeneratedJob {
@@ -275,7 +285,10 @@ function pickAirportBiased(
   return items[items.length - 1]!.value;
 }
 
-function buildOpenMarketJob(ctx: GenerationContext): GeneratedJob | null {
+function buildOpenMarketJob(
+  ctx: GenerationContext,
+  forceOriginIcao?: string,
+): GeneratedJob | null {
   if (ctx.airports.length < 2) return null;
 
   const requiredClass = weightedPick(ctx.rng, OPEN_MARKET_CLASS_WEIGHTS).value;
@@ -299,12 +312,15 @@ function buildOpenMarketJob(ctx: GenerationContext): GeneratedJob | null {
   const weatherSensitivity: WeatherSensitivity =
     ctx.rng() < 0.9 ? "none" : "mild";
 
-  const origin = pickAirportBiased(ctx.rng, ctx.airports);
+  const origin = forceOriginIcao
+    ? airportByIcao(ctx.airports, forceOriginIcao) ??
+      pickAirportBiased(ctx.rng, ctx.airports)
+    : pickAirportBiased(ctx.rng, ctx.airports);
   const destination = pickAirportBiased(ctx.rng, ctx.airports, origin.icao);
 
   const distanceNm = haversineNm(origin, destination);
 
-  const pay = calculatePay({
+  const rawPay = calculatePay({
     distanceNm,
     requiredClass,
     payloadLbs,
@@ -315,6 +331,7 @@ function buildOpenMarketJob(ctx: GenerationContext): GeneratedJob | null {
     basePayMultiplier: 0.85,
     familiarityDiscount: 0,
   });
+  const pay = Math.max(OPEN_MARKET_PAY_FLOOR_CENTS, rawPay);
 
   const description = isCargo
     ? `Cargo run, ${payloadLbs} lbs from ${origin.icao} to ${destination.icao}.`
@@ -345,13 +362,27 @@ function buildOpenMarketJob(ctx: GenerationContext): GeneratedJob | null {
 
 const MAX_OPEN_MARKET_PER_TICK = 3;
 
+// Open-market jobs have a $400 (40,000¢) pay floor. Below this, even a short
+// hop in a wet rental loses money once reposition + landing fees are counted.
+// Branded clients keep their own pay scales.
+const OPEN_MARKET_PAY_FLOOR_CENTS = 40_000;
+
 export function generateOpenMarketJobs(ctx: GenerationContext): GeneratedJob[] {
   const deficit = ctx.targetBoardSize - ctx.currentBoardSize;
   if (deficit <= 0) return [];
   const count = Math.min(deficit, MAX_OPEN_MARKET_PER_TICK);
   const jobs: GeneratedJob[] = [];
+  // Home-airport guarantee: if the player's airport has no jobs already and
+  // we're emitting at least one open-market job, force the first one to
+  // depart from there. Without this, the major-de-weighted origin pick can
+  // leave players at big airports with nothing to fly out.
+  const needsHomeJob =
+    !!ctx.playerLocationIcao &&
+    (ctx.homeOriginJobCount ?? 0) === 0 &&
+    count > 0;
   for (let i = 0; i < count; i++) {
-    const job = buildOpenMarketJob(ctx);
+    const force = needsHomeJob && i === 0 ? ctx.playerLocationIcao : undefined;
+    const job = buildOpenMarketJob(ctx, force);
     if (job) jobs.push(job);
   }
   return jobs;
@@ -366,8 +397,19 @@ export function runGenerationTick(
     jobs.push(...generateClientJobs(client, ctx));
   }
   const projectedBoardSize = ctx.currentBoardSize + jobs.length;
+  // Roll forward the home-origin count so the open-market step doesn't
+  // double-up on a home job already produced by a client this tick.
+  const homeOriginAfterClients =
+    ctx.playerLocationIcao != null
+      ? (ctx.homeOriginJobCount ?? 0) +
+        jobs.filter((j) => j.originIcao === ctx.playerLocationIcao).length
+      : ctx.homeOriginJobCount;
   jobs.push(
-    ...generateOpenMarketJobs({ ...ctx, currentBoardSize: projectedBoardSize }),
+    ...generateOpenMarketJobs({
+      ...ctx,
+      currentBoardSize: projectedBoardSize,
+      homeOriginJobCount: homeOriginAfterClients,
+    }),
   );
   return jobs;
 }

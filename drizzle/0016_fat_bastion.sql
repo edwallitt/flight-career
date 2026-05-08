@@ -1,0 +1,1 @@
+ALTER TABLE `career` ADD `is_paused` integer DEFAULT false NOT NULL;

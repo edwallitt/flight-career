@@ -90,6 +90,33 @@ export function MarketDrawer({
     ? Math.round((1 - listing.depreciationFactor) * 100)
     : 0;
 
+  // Marginal break-even vs renting the same type wet. National-average fuel
+  // prices keep this insulated from per-airport drift — the answer is "rough
+  // hours of flying", not a precise quote. We don't fold in monthly hangar +
+  // insurance because the recoup-per-flight-hour story is the one a player
+  // can act on at the listing level.
+  const AVG_FUEL_CENTS_PER_GAL: Record<"avgas" | "jet-a", number> = {
+    avgas: 720,
+    "jet-a": 580,
+  };
+  const breakeven = (() => {
+    if (!listing) return null;
+    const ownedFuelPerHour =
+      listing.fuelBurnGph * AVG_FUEL_CENTS_PER_GAL[listing.fuelType];
+    const ownedInspectionPerHour = listing.hundredHourCost / 100;
+    const ownedHourly = ownedFuelPerHour + ownedInspectionPerHour;
+    const savingsPerHour = listing.rentalRatePerHour - ownedHourly;
+    if (savingsPerHour <= 0) return null;
+    const hoursToRecoup = listing.askingPriceCents / savingsPerHour;
+    return {
+      hoursToRecoup,
+      savingsPerHour,
+      ownedHourly,
+      rentalHourly: listing.rentalRatePerHour,
+      monthlyFixed: listing.hangarageMonthly + listing.insuranceMonthly,
+    };
+  })();
+
   return (
     <aside
       className={[
@@ -272,6 +299,45 @@ export function MarketDrawer({
                 </div>
               </div>
             </div>
+
+            {/* Break-even vs renting the same type */}
+            {breakeven && (
+              <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+                <div className="flex items-center gap-2">
+                  <span className="label">Break-even vs rental</span>
+                  <span className="h-px flex-1 bg-ink-600" />
+                </div>
+                <div className="mt-3 flex items-baseline justify-between">
+                  <span className="font-mono text-[26px] tabular-nums text-amber-warm">
+                    ~{Math.round(breakeven.hoursToRecoup).toLocaleString()}
+                    <span className="ml-1 text-[14px] text-muted-dim">hrs</span>
+                  </span>
+                  <span className="font-mono text-tiny text-muted-dim">
+                    saves {formatCash(breakeven.savingsPerHour)}/hr vs wet
+                    rental
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-tiny">
+                  <span className="text-muted">Owned · fuel + 100hr</span>
+                  <span className="text-right tabular-nums text-text">
+                    {formatCash(breakeven.ownedHourly)}/hr
+                  </span>
+                  <span className="text-muted">Wet rental rate</span>
+                  <span className="text-right tabular-nums text-text">
+                    {formatCash(breakeven.rentalHourly)}/hr
+                  </span>
+                  <span className="text-muted">Monthly fixed costs</span>
+                  <span className="text-right tabular-nums text-text">
+                    {formatCash(breakeven.monthlyFixed)}/mo
+                  </span>
+                </div>
+                <p className="mt-3 text-tiny text-muted">
+                  Excludes hangar + insurance and assumes you'd otherwise rent
+                  the same class. Real recoup is longer when you fly fewer
+                  hours per month than the fixed costs imply.
+                </p>
+              </div>
+            )}
 
             {/* Travel hint */}
             <div

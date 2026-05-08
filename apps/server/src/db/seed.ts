@@ -1,10 +1,13 @@
 import { eq } from "drizzle-orm";
+import { calculatePay, haversineNm } from "@flightcareer/shared";
 import { db } from "./client.js";
 import {
   aircraftListings,
   aircraftTypes,
   airports,
   career,
+  jobs,
+  ownedAircraft,
   ratings,
   rentalFleet,
   reputation,
@@ -12,6 +15,7 @@ import {
 import { aircraftSeed } from "./seed-data/aircraft.js";
 import { airportSeed } from "./seed-data/airports.js";
 import { ensureFuelPriceCurrent } from "../services/fuelDrift.js";
+import { tickJobGeneration } from "../services/jobBoard.js";
 import { refreshMarketplace, rngFromSeed } from "../services/marketplace.js";
 
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
@@ -71,6 +75,60 @@ function rentalTypesFor(
   return [...types];
 }
 
+// Inserts a guaranteed first-flight job: Maritime Cargo Express CYHZ → CYAW.
+// 14 nm short hop, light parcel cargo, well within a C152's range and payload.
+// Uses the shared pay calculator with the same multipliers as the standard
+// MCE short-hop template so the math stays consistent.
+function seedFirstFlightJob(simNow: number): void {
+  const HOUR_MS = 60 * 60 * 1000;
+  const cyhz = airportSeed.find((a) => a.icao === "CYHZ");
+  const cyaw = airportSeed.find((a) => a.icao === "CYAW");
+  if (!cyhz || !cyaw) return;
+
+  const distanceNm = haversineNm(
+    { lat: cyhz.lat, lon: cyhz.lon },
+    { lat: cyaw.lat, lon: cyaw.lon },
+  );
+  const payloadLbs = 140;
+  const pay = calculatePay({
+    distanceNm,
+    requiredClass: "SEP",
+    payloadLbs,
+    urgency: "standard",
+    weatherSensitivity: "mild",
+    isUnpavedRequired: false,
+    isRemoteDestination: false,
+    basePayMultiplier: 8.0,
+    familiarityDiscount: 0,
+  });
+
+  db.insert(jobs)
+    .values({
+      clientId: "maritime_cargo",
+      role: "bush",
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      payloadLbs,
+      payloadType: "cargo",
+      paxCount: null,
+      requiredClass: "SEP",
+      requiredCapabilitiesJson: JSON.stringify([]),
+      pay,
+      generatedAt: simNow,
+      expiresAt: simNow + 24 * HOUR_MS,
+      earliestDeparture: null,
+      latestDeparture: null,
+      urgency: "standard",
+      weatherSensitivity: "mild",
+      legsJson: null,
+      description:
+        "Short courier hop down to Shearwater — quick parcel transfer for the harbour office.",
+      distanceNm: Math.round(distanceNm),
+      status: "open",
+    })
+    .run();
+}
+
 async function seed() {
   // Catalogs: idempotent — re-running is a no-op.
   if (airportSeed.length > 0) {
@@ -99,20 +157,50 @@ async function seed() {
   }));
   db.insert(reputation).values(reputationRows).onConflictDoNothing().run();
 
-  // Career singleton — only seed if id=1 doesn't exist.
+  // Career singleton — only seed if id=1 doesn't exist. New player gets a
+  // small inheritance: $60k cash and grandfather's C152, both narrated in the
+  // first-run welcome modal on the web side.
+  const STARTER_HOME_ICAO = "CYHZ";
   const existing = db.select().from(career).where(eq(career.id, 1)).get();
   if (!existing) {
     db.insert(career)
       .values({
         id: 1,
         pilotName: "Pilot",
-        cash: 1_500_000,
-        currentLocationIcao: "CYHZ",
+        cash: 6_000_000,
+        currentLocationIcao: STARTER_HOME_ICAO,
         simDateTime: now,
         lastPlayedAt: now,
         startedAt: now,
       })
       .run();
+
+    // Grandfather's C152 — well-flown, recently inspected, fuelled. Tail
+    // number "C-GPOP" carries the narrative.
+    const SIM_DAY_MS = 24 * 60 * 60 * 1000;
+    const c152 = aircraftSeed.find((a) => a.id === "c152");
+    if (c152) {
+      const daysSinceAnnual = 90;
+      db.insert(ownedAircraft)
+        .values({
+          tailNumber: "C-GPOP",
+          aircraftTypeId: "c152",
+          currentLocationIcao: STARTER_HOME_ICAO,
+          airframeHours: 8500,
+          engineHoursSinceOverhaul: 800,
+          hoursSince100hr: 25,
+          hoursSinceAnnual: daysSinceAnnual,
+          annualDueAt: now + (365 - daysSinceAnnual) * SIM_DAY_MS,
+          fuelOnBoardGal: c152.fuelCapacityGal ?? 24.5,
+          status: "available",
+          purchasedAt: now,
+          purchasePrice: 0,
+          loanId: null,
+          nextMonthlyCostAt: now + 30 * SIM_DAY_MS,
+        })
+        .onConflictDoNothing()
+        .run();
+    }
   }
 
   // Rental fleets at every major/regional airport. Idempotent via the unique
@@ -143,6 +231,21 @@ async function seed() {
     db.select({ simDateTime: career.simDateTime }).from(career).where(eq(career.id, 1)).get()
       ?.simDateTime ?? now;
   ensureFuelPriceCurrent(careerSimNow);
+
+  // Pre-warm the dispatch board so the first launch isn't an empty screen.
+  // Each tick advances sim time by 30 minutes and may emit 0-N jobs; running
+  // a handful of ticks reliably fills the board to roughly its target size.
+  // The home-airport guarantee ensures at least one job per tick departs
+  // from the player's current location.
+  const openJobCount = db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.status, "open"))
+    .all().length;
+  if (openJobCount === 0) {
+    seedFirstFlightJob(careerSimNow);
+    for (let i = 0; i < 6; i++) tickJobGeneration();
+  }
 
   const counts = {
     aircraftTypes: db.select().from(aircraftTypes).all().length,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { formatCash, formatSimDateTime } from "../../lib/formatters.js";
 import { AirportPicker } from "./AirportPicker.js";
@@ -69,7 +69,13 @@ function formatCostInline(cents: number): string {
   return `$${Math.round(cents / 100).toLocaleString("en-US")}`;
 }
 
-export function TravelPanel({ onClose }: { onClose: () => void }) {
+export function TravelPanel({
+  onClose,
+  presetDestinationIcao,
+}: {
+  onClose: () => void;
+  presetDestinationIcao?: string | null;
+}) {
   useEscape(onClose);
 
   const utils = trpc.useUtils();
@@ -77,22 +83,50 @@ export function TravelPanel({ onClose }: { onClose: () => void }) {
   const airports = trpc.airports.icaoOptions.useQuery();
   const ownedForTransfer = trpc.travel.listOwnedForTransfer.useQuery();
 
-  const [tab, setTab] = useState<TabKey>("pilot");
-  const [destination, setDestination] = useState<string | null>(null);
-  const [aircraftId, setAircraftId] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // Reset destination/aircraft when switching tabs
-  useEffect(() => {
-    setDestination(null);
-    setAircraftId(null);
-    setError(null);
-  }, [tab]);
-
   const owned = ownedForTransfer.data ?? [];
   const ownedAtMyLocation = owned.filter(
     (a) => a.currentLocationIcao === career.data?.currentLocationIcao,
   );
+
+  const [tab, setTab] = useState<TabKey>("pilot");
+  const [destination, setDestination] = useState<string | null>(
+    presetDestinationIcao ?? null,
+  );
+  const [aircraftId, setAircraftId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Smart default: when this panel was deep-linked and the player has one
+  // owned aircraft already at their current airport, switch to the
+  // "travel with aircraft" tab and preselect that plane. The ref guards
+  // against re-firing once the user manually changes tabs.
+  const smartDefaultApplied = useRef(false);
+  useEffect(() => {
+    if (smartDefaultApplied.current) return;
+    if (!presetDestinationIcao) return;
+    if (!ownedForTransfer.data || !career.data) return;
+    smartDefaultApplied.current = true;
+    if (owned.length === 1 && ownedAtMyLocation.length === 1) {
+      setTab("pilot_aircraft");
+      setAircraftId(ownedAtMyLocation[0]!.id);
+    }
+  }, [
+    presetDestinationIcao,
+    ownedForTransfer.data,
+    career.data,
+    owned,
+    ownedAtMyLocation,
+  ]);
+
+  // Tab change refreshes the destination preset and clears errors. Aircraft
+  // selection is intentionally NOT cleared: tabs that don't use it ignore it
+  // and StrictMode's double-invoke would otherwise clobber the smart-default
+  // preselection. Switching to a tab where the aircraft is invalid (e.g.
+  // pilot_aircraft requires the aircraft to be at the player's location)
+  // just leaves selectedAircraft computed as null.
+  useEffect(() => {
+    setDestination(presetDestinationIcao ?? null);
+    setError(null);
+  }, [tab, presetDestinationIcao]);
 
   // For pilot_aircraft, aircraft must be at the player's current location
   const aircraftPool = tab === "pilot_aircraft" ? ownedAtMyLocation : owned;

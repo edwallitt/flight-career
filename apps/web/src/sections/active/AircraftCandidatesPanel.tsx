@@ -94,6 +94,21 @@ function FuelLine({ fuel }: { fuel: RankedCandidate["fuel"] }) {
   );
 }
 
+// Primary reason a candidate is ineligible. Sorted so the most actionable
+// (location, fuel) bubble up over the structural ones (rating, class).
+const REASON_PRIORITY: Record<string, number> = {
+  WRONG_LOCATION: 0,
+  AIRCRAFT_UNAVAILABLE: 1,
+  CANNOT_DISPATCH: 2,
+  INSUFFICIENT_PAYLOAD: 3,
+  INSUFFICIENT_RANGE: 4,
+  RUNWAY_TOO_SHORT: 5,
+  UNPAVED_INCAPABLE: 6,
+  CAPABILITY_MISSING: 7,
+  NOT_RATED: 8,
+  CLASS_TOO_LOW: 9,
+};
+
 function ReasonChips({
   reasons,
   cannotDispatchReason,
@@ -102,9 +117,12 @@ function ReasonChips({
   cannotDispatchReason?: string;
 }) {
   if (reasons.length === 0) return null;
+  const sorted = [...reasons].sort(
+    (a, b) => (REASON_PRIORITY[a] ?? 99) - (REASON_PRIORITY[b] ?? 99),
+  );
   return (
     <div className="mt-2 flex flex-wrap gap-1">
-      {reasons.map((r) => (
+      {sorted.map((r) => (
         <span
           key={r}
           title={r === "CANNOT_DISPATCH" ? cannotDispatchReason : undefined}
@@ -114,6 +132,39 @@ function ReasonChips({
         </span>
       ))}
     </div>
+  );
+}
+
+// "Best" label on the top-ranked eligible candidate so the player sees the
+// recommended pick at a glance. Replaces the raw `rank -1000` sentinel that
+// used to leak into the UI.
+function EligibilityBadge({
+  isEligible,
+  isTop,
+  isOwned,
+}: {
+  isEligible: boolean;
+  isTop: boolean;
+  isOwned: boolean;
+}) {
+  if (!isEligible) {
+    return (
+      <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+        ineligible
+      </span>
+    );
+  }
+  if (isTop) {
+    return (
+      <span className="rounded-sm border border-amber-deep/70 bg-amber-glow/[0.08] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+        {isOwned ? "best · owned" : "best match"}
+      </span>
+    );
+  }
+  return (
+    <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+      alternate
+    </span>
   );
 }
 
@@ -159,6 +210,10 @@ export function AircraftCandidatesPanel({
   }
 
   const eligibleCount = ranked.filter((r) => r.eligibility.eligible).length;
+  const topEligibleKey = (() => {
+    const top = ranked.find((r) => r.eligibility.eligible);
+    return top ? selectionKey(top) : null;
+  })();
 
   return (
     <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
@@ -263,14 +318,11 @@ export function AircraftCandidatesPanel({
                   <span>· rng {c.candidate.rangeNm}nm</span>
                   <span>· pld {c.candidate.maxPayloadLbs}lb</span>
                 </div>
-                <span
-                  className={[
-                    "font-mono text-[10px] uppercase tracking-callsign",
-                    isEligible ? "text-amber-glow/80" : "text-muted-faint",
-                  ].join(" ")}
-                >
-                  rank {c.preferenceScore}
-                </span>
+                <EligibilityBadge
+                  isEligible={isEligible}
+                  isTop={k === topEligibleKey}
+                  isOwned={isOwned}
+                />
               </div>
 
               <FuelLine fuel={c.fuel} />

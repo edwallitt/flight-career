@@ -50,7 +50,7 @@ function AircraftStatusPanel({
   source,
   risk,
 }: {
-  source: "owned" | "rental";
+  source: "owned" | "rental" | "ferry";
   risk: RiskInfo | null;
 }) {
   if (source === "rental") {
@@ -62,6 +62,23 @@ function AircraftStatusPanel({
         </div>
         <div className="mt-2 font-mono text-[12px] text-amber-glow">
           ✓ Rental — no maintenance risk to you
+        </div>
+      </div>
+    );
+  }
+
+  if (source === "ferry") {
+    return (
+      <div className="rounded-sm border border-sky-500/40 bg-sky-500/[0.05] p-4">
+        <div className="flex items-center gap-2">
+          <span className="label text-sky-300/80">Ferry contract</span>
+          <span className="h-px flex-1 bg-sky-500/20" />
+        </div>
+        <div className="mt-2 font-mono text-[12px] text-sky-300">
+          ✓ Owner covers fuel, fees, and maintenance
+        </div>
+        <div className="mt-1 font-mono text-tiny text-muted">
+          Block hours count toward your rating; no aircraft state changes for you.
         </div>
       </div>
     );
@@ -209,6 +226,47 @@ function RentalFuelPanel({
         Aircraft will be fueled and ready at departure.
       </div>
       <div className="mt-4 grid grid-cols-2 gap-3 border-t border-amber-deep/30 pt-3 font-mono text-tiny text-muted-dim">
+        <div className="flex flex-col">
+          <span className="label">Spec range</span>
+          <span className="mt-0.5 tabular-nums text-text">~{fmtNm(rangeNm)} nm</span>
+        </div>
+        <div className="flex flex-col">
+          <span className="label">Trip block</span>
+          <span className="mt-0.5 tabular-nums text-text">
+            ~{tripHours.toFixed(1)} hrs · {fmtNm(tripDistanceNm)} nm
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FerryFuelPanel({
+  rangeNm,
+  cruiseSpeedKts,
+  tripDistanceNm,
+}: {
+  rangeNm: number;
+  cruiseSpeedKts: number;
+  tripDistanceNm: number;
+}) {
+  const tripHours = cruiseSpeedKts > 0 ? tripDistanceNm / cruiseSpeedKts : 0;
+  return (
+    <div className="rounded-sm border border-sky-500/40 bg-sky-500/[0.05] p-4">
+      <div className="flex items-center gap-2">
+        <span className="label text-sky-300/80">Fuel</span>
+        <span className="h-px flex-1 bg-sky-500/20" />
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-sky-300">
+          owner-supplied
+        </span>
+      </div>
+      <div className="mt-3 font-mono text-[12px] text-text-high">
+        Ferry contract — fuel and landing fees on the owner's account
+      </div>
+      <div className="mt-1 font-mono text-tiny text-muted">
+        Aircraft will be fueled at {tripDistanceNm > 0 ? "departure" : "the ramp"}.
+      </div>
+      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-sky-500/20 pt-3 font-mono text-tiny text-muted-dim">
         <div className="flex flex-col">
           <span className="label">Spec range</span>
           <span className="mt-0.5 tabular-nums text-text">~{fmtNm(rangeNm)} nm</span>
@@ -510,16 +568,19 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
   const j = data.job;
   const a = data.aircraft;
   const isRental = a.source === "rental";
+  const isFerry = a.source === "ferry";
+  // Owned aircraft are the only source where the player pays for fuel uplift.
+  const noUplift = isRental || isFerry;
 
   const parsedFuel = Number(fuelInput);
-  const fuelValid = isRental
+  const fuelValid = noUplift
     ? true
     : Number.isFinite(parsedFuel) && parsedFuel >= 0;
   const headroomGal = Math.max(0, a.fuelCapacityGal - a.currentFuelGal);
-  const upliftGal = isRental
+  const upliftGal = noUplift
     ? 0
     : Math.max(0, Math.min(headroomGal, fuelValid ? parsedFuel : 0));
-  const fuelCost = isRental
+  const fuelCost = noUplift
     ? 0
     : Math.round(upliftGal * data.fuelPriceCentsPerGal);
   const cash = career.data?.cash ?? 0;
@@ -531,7 +592,7 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
 
   // Operational projections. Rental: assume full tanks (server reports
   // currentFuelGal = capacity for rentals).
-  const totalFuelGal = isRental ? a.fuelCapacityGal : a.currentFuelGal + upliftGal;
+  const totalFuelGal = noUplift ? a.fuelCapacityGal : a.currentFuelGal + upliftGal;
   const reserveGal = 0.75 * a.fuelBurnGph;
   const usableGal = Math.max(0, totalFuelGal - reserveGal);
   const operationalRangeNm =
@@ -539,7 +600,7 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
   const reservesAtDestNm = Math.max(0, operationalRangeNm - j.distanceNm);
   const reservesAtDestMin =
     a.cruiseSpeedKts > 0 ? (reservesAtDestNm / a.cruiseSpeedKts) * 60 : 0;
-  const fuelInsufficient = !isRental && operationalRangeNm < j.distanceNm;
+  const fuelInsufficient = !noUplift && operationalRangeNm < j.distanceNm;
   const tripUtilization =
     operationalRangeNm > 0 ? Math.min(1, j.distanceNm / operationalRangeNm) : 0;
 
@@ -675,7 +736,13 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
               </div>
             </div>
 
-            {isRental ? (
+            {isFerry ? (
+              <FerryFuelPanel
+                rangeNm={a.rangeNm}
+                cruiseSpeedKts={a.cruiseSpeedKts}
+                tripDistanceNm={j.distanceNm}
+              />
+            ) : isRental ? (
               <RentalFuelPanel
                 rangeNm={a.rangeNm}
                 cruiseSpeedKts={a.cruiseSpeedKts}
@@ -705,7 +772,7 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
               />
             )}
 
-            {!isRental && (
+            {!noUplift && (
               <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
                 <div className="flex items-center gap-2">
                   <span className="label">Cash impact</span>
@@ -759,7 +826,14 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
             <AircraftStatusPanel source={a.source} risk={data.risk} />
 
             <div className="rounded-sm border border-ink-600 bg-ink-750 p-4 text-tiny leading-relaxed text-muted">
-              {isRental ? (
+              {isFerry ? (
+                <>
+                  Once you confirm, the ferry contract locks in as{" "}
+                  <span className="text-amber-glow">briefed</span>. Owner
+                  covers fuel and fees; you collect the ferry pay on
+                  completion.
+                </>
+              ) : isRental ? (
                 <>
                   Once you confirm, the rental is locked in as{" "}
                   <span className="text-amber-glow">briefed</span>. Hourly cost
@@ -805,7 +879,7 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
           >
             {briefMutation.isPending
               ? "Confirming…"
-              : isRental
+              : noUplift
                 ? "Confirm brief"
                 : `Confirm brief & pay ${formatCash(fuelCost)}`}
             <span className="ml-2 text-amber-deep">▸</span>

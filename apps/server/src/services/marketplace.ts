@@ -160,6 +160,12 @@ export interface EnrichedListing {
   expiresAt: number;
   fuelCapacityGal: number;
   fuelType: "avgas" | "jet-a";
+  cruiseSpeedKts: number;
+  fuelBurnGph: number;
+  rentalRatePerHour: number;
+  hangarageMonthly: number;
+  insuranceMonthly: number;
+  hundredHourCost: number;
 }
 
 export interface ListingsInput {
@@ -211,6 +217,12 @@ function rowToEnriched(
     expiresAt: listing.expiresAt,
     fuelCapacityGal: type.fuelCapacityGal,
     fuelType: type.fuelType,
+    cruiseSpeedKts: type.cruiseSpeedKts,
+    fuelBurnGph: type.fuelBurnGph,
+    rentalRatePerHour: type.rentalRatePerHour,
+    hangarageMonthly: type.hangarageMonthly,
+    insuranceMonthly: type.insuranceMonthly,
+    hundredHourCost: type.hundredHourCost,
   };
 }
 

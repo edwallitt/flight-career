@@ -14,8 +14,11 @@ try {
 
 import { serve } from "@hono/node-server";
 import { trpcServer } from "@hono/trpc-server";
+import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { db } from "./db/client.js";
+import { career } from "./db/schema.js";
 import { processExams } from "./services/career.js";
 import { tickJobGeneration } from "./services/jobBoard.js";
 import {
@@ -41,6 +44,17 @@ serve({ fetch: app.fetch, port });
 const TICK_INTERVAL_MS = 30_000;
 let tickCount = 0;
 setInterval(() => {
+  // Honor the player-controlled pause. Sim time freezes, jobs don't expire,
+  // fuel drift halts, marketplace doesn't refresh — exactly what the player
+  // expects when they pause to plan a flight. The Force-tick mutation in the
+  // jobs router still calls tickJobGeneration directly and is unaffected.
+  const careerRow = db
+    .select({ isPaused: career.isPaused })
+    .from(career)
+    .where(eq(career.id, 1))
+    .get();
+  if (careerRow?.isPaused) return;
+
   try {
     const result = tickJobGeneration();
     if (result.inserted > 0 || result.expired > 0) {

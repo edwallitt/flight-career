@@ -81,6 +81,10 @@ export interface AtlasJob {
   clientId: string | null;
   clientName: string | null;
   description: string;
+  jobType: "standard" | "ferry";
+  ferrySource: "owner" | "dealer" | "operator" | null;
+  ferryAircraftTail: string | null;
+  ferryAircraftLabel: string | null;
 }
 
 export interface AtlasPlayer {
@@ -220,12 +224,30 @@ export function getAtlasData(): AtlasData {
 
   const clientById = new Map(ALL_CLIENTS.map((c) => [c.id, c]));
 
+  // Resolve ferry aircraft labels from the catalog (one fetch, used for any
+  // ferry rows surfaced this query).
+  const ferryTypeIds = jobRows
+    .map((j) => j.ferryAircraftTypeId)
+    .filter((id): id is string => id != null);
+  const ferryTypesById = new Map<
+    string,
+    { manufacturer: string; model: string }
+  >();
+  if (ferryTypeIds.length > 0) {
+    for (const t of db.select().from(aircraftTypes).all()) {
+      ferryTypesById.set(t.id, { manufacturer: t.manufacturer, model: t.model });
+    }
+  }
+
   const atlasJobs: AtlasJob[] = [];
   for (const j of jobRows) {
     const origin = airportByIcao.get(j.originIcao);
     const dest = airportByIcao.get(j.destinationIcao);
     if (!origin || !dest) continue;
     const client = j.clientId ? clientById.get(j.clientId) : undefined;
+    const ferryType = j.ferryAircraftTypeId
+      ? ferryTypesById.get(j.ferryAircraftTypeId)
+      : undefined;
     atlasJobs.push({
       id: j.id,
       originIcao: j.originIcao,
@@ -243,8 +265,17 @@ export function getAtlasData(): AtlasData {
       weatherSensitivity: j.weatherSensitivity,
       pay: j.pay,
       clientId: j.clientId,
-      clientName: client?.name ?? null,
+      clientName:
+        j.jobType === "ferry"
+          ? j.ferryOwnerName
+          : client?.name ?? null,
       description: j.description,
+      jobType: j.jobType,
+      ferrySource: j.ferrySource ?? null,
+      ferryAircraftTail: j.ferryAircraftTail ?? null,
+      ferryAircraftLabel: ferryType
+        ? `${ferryType.manufacturer} ${ferryType.model}`
+        : null,
     });
   }
 

@@ -3,10 +3,11 @@ import {
   buildBriefingPrompt,
   getClientById,
   type BriefingContent,
+  type FerryBriefingContext,
 } from "@flightcareer/shared";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { airports, jobs } from "../db/schema.js";
+import { aircraftTypes, airports, jobs } from "../db/schema.js";
 
 export type BriefingResult =
   | { ok: true; briefing: BriefingContent; source: "cached" | "generated" }
@@ -85,10 +86,35 @@ export async function generateBriefing(jobId: number): Promise<BriefingResult> {
 
   const clientDef = job.clientId ? getClientById(job.clientId) : undefined;
 
+  let ferryCtx: FerryBriefingContext | null = null;
+  if (
+    job.jobType === "ferry" &&
+    job.ferryAircraftTypeId &&
+    job.ferryAircraftTail &&
+    job.ferrySource &&
+    job.ferryOwnerName
+  ) {
+    const t = db
+      .select()
+      .from(aircraftTypes)
+      .where(eq(aircraftTypes.id, job.ferryAircraftTypeId))
+      .get();
+    if (t) {
+      ferryCtx = {
+        source: job.ferrySource,
+        ownerName: job.ferryOwnerName,
+        aircraftLabel: `${t.manufacturer} ${t.model}`,
+        tail: job.ferryAircraftTail,
+        aircraftClass: t.class,
+      };
+    }
+  }
+
   const { systemPrompt, userPrompt } = buildBriefingPrompt({
-    clientName: clientDef?.name ?? null,
+    clientName: ferryCtx?.ownerName ?? clientDef?.name ?? null,
     clientRole: job.role,
     clientVoice: clientDef?.voice ?? null,
+    ferry: ferryCtx,
     origin: {
       icao: job.originIcao,
       name: originRow?.name ?? job.originIcao,

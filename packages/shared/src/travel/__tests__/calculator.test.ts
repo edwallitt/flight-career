@@ -42,7 +42,7 @@ describe("calculateTransfer — pilot", () => {
     expect(remote.costCents).toBe(Math.round(baseline.costCents * 1.5 / 100) * 100);
   });
 
-  it("enforces a minimum duration of 180 minutes for short hops", () => {
+  it("enforces a 180-minute floor at the 50nm short-hop boundary", () => {
     const short = calculateTransfer({
       type: "pilot",
       originIcao: "CYHZ",
@@ -52,6 +52,44 @@ describe("calculateTransfer — pilot", () => {
       destinationSize: "regional",
     });
     expect(short.durationMinutes).toBe(180);
+  });
+
+  it("uses a 30-minute floor for sub-50nm taxis", () => {
+    const taxi = calculateTransfer({
+      type: "pilot",
+      originIcao: "CYAW",
+      destinationIcao: "CYHZ",
+      distanceNm: 14,
+      originSize: "small",
+      destinationSize: "regional",
+    });
+    expect(taxi.durationMinutes).toBe(30);
+  });
+
+  it("halves the small-field surcharge on sub-50nm hops", () => {
+    const taxi = calculateTransfer({
+      type: "pilot",
+      originIcao: "CYAW",
+      destinationIcao: "CYHZ",
+      distanceNm: 14,
+      originSize: "small",
+      destinationSize: "regional",
+    });
+    const longHop = calculateTransfer({
+      type: "pilot",
+      originIcao: "CYAW",
+      destinationIcao: "CYQM",
+      distanceNm: 80,
+      originSize: "small",
+      destinationSize: "regional",
+    });
+    // Same baseline structure but distance differs; verify the 1.25× vs 1.5×
+    // multiplier shows up by reconstructing the unmultiplied base and
+    // checking the implied multiplier on each.
+    const taxiBase = 80 * 14 + 5_000; // cents per nm + base
+    const longBase = 80 * 80 + 5_000;
+    expect(taxi.costCents / taxiBase).toBeCloseTo(1.25, 1);
+    expect(longHop.costCents / longBase).toBeCloseTo(1.5, 1);
   });
 
   it("scales duration with distance once over the floor", () => {

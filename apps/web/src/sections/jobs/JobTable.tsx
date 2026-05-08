@@ -163,6 +163,14 @@ function SortIndicator({ active, dir }: { active: boolean; dir: SortDir }) {
 function RowFlags({ job }: { job: JobRow }) {
   const flags: { letter: string; tone: string; title: string }[] = [];
 
+  if (job.jobType === "ferry") {
+    flags.push({
+      letter: "F",
+      tone: "border-sky-500/70 text-sky-300 bg-sky-500/[0.08]",
+      title: "Ferry / repositioning contract",
+    });
+  }
+
   if (job.weatherSensitivity === "strict") {
     flags.push({ letter: "W", tone: "border-sky-500/60 text-sky-300", title: "Strict weather" });
   } else if (job.weatherSensitivity === "mild") {
@@ -173,16 +181,19 @@ function RowFlags({ job }: { job: JobRow }) {
     flags.push({ letter: "U", tone: "border-amber-deep text-amber-glow", title: "Unpaved" });
   }
 
-  if (job.payloadType === "medical") {
-    flags.push({ letter: "M", tone: "border-rose-500/60 text-rose-300", title: "Medical" });
-  } else if (job.payloadType === "survey") {
-    flags.push({ letter: "S", tone: "border-emerald-500/60 text-emerald-300", title: "Survey" });
-  } else if (job.payloadType === "mixed") {
-    flags.push({ letter: "X", tone: "border-violet-500/60 text-violet-300", title: "Mixed" });
-  } else if (job.payloadType === "pax") {
-    flags.push({ letter: "P", tone: "border-zinc-500/60 text-zinc-300", title: "Passengers" });
-  } else {
-    flags.push({ letter: "C", tone: "border-zinc-600/60 text-zinc-400", title: "Cargo" });
+  // Ferries have no real payload type — skip the cargo/pax chip for them.
+  if (job.jobType !== "ferry") {
+    if (job.payloadType === "medical") {
+      flags.push({ letter: "M", tone: "border-rose-500/60 text-rose-300", title: "Medical" });
+    } else if (job.payloadType === "survey") {
+      flags.push({ letter: "S", tone: "border-emerald-500/60 text-emerald-300", title: "Survey" });
+    } else if (job.payloadType === "mixed") {
+      flags.push({ letter: "X", tone: "border-violet-500/60 text-violet-300", title: "Mixed" });
+    } else if (job.payloadType === "pax") {
+      flags.push({ letter: "P", tone: "border-zinc-500/60 text-zinc-300", title: "Passengers" });
+    } else {
+      flags.push({ letter: "C", tone: "border-zinc-600/60 text-zinc-400", title: "Cargo" });
+    }
   }
 
   return (
@@ -301,7 +312,8 @@ export function JobTable({
         {sortedJobs.map((job, idx) => {
           const selected = selectedId === job.id;
           const expiresIn = formatRelativeFromNow(job.expiresAt, simNow);
-          const isOpen = job.role === "open";
+          const isFerry = job.jobType === "ferry";
+          const isOpen = !isFerry && job.role === "open";
 
           const isUnreachable = job.reachability.status === "unreachable";
 
@@ -342,45 +354,62 @@ export function JobTable({
                 <span
                   className={[
                     "mt-0.5 font-mono text-[10px] uppercase tracking-callsign",
-                    isOpen ? "text-muted-dim" : "text-amber-deep",
+                    isFerry
+                      ? "text-sky-300"
+                      : isOpen
+                        ? "text-muted-dim"
+                        : "text-amber-deep",
                   ].join(" ")}
                 >
-                  {ROLE_LABEL[job.role] ?? job.role}
+                  {isFerry ? "Ferry" : (ROLE_LABEL[job.role] ?? job.role)}
                 </span>
               </div>
 
               {/* Route */}
-              <div className="flex items-center gap-2 font-mono text-text-high">
-                <span
-                  className={[
-                    "h-1.5 w-1.5 flex-none rounded-full",
-                    REACH_DOT[job.reachability.status],
-                  ].join(" ")}
-                  title={reachTooltip(
-                    job.reachability.status,
-                    job,
-                    playerLocationIcao,
-                  )}
-                  aria-label={reachTooltip(
-                    job.reachability.status,
-                    job,
-                    playerLocationIcao,
-                  )}
-                />
-                <span className="icao text-sm">{job.originIcao}</span>
-                <span className="flex items-center gap-1 text-muted-faint">
-                  <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden>
-                    <line
-                      x1="0"
-                      y1="3"
-                      x2="22"
-                      y2="3"
-                      stroke="currentColor"
-                      strokeDasharray="2 2"
-                    />
-                  </svg>
-                </span>
-                <span className="icao text-sm">{job.destinationIcao}</span>
+              <div className="flex min-w-0 flex-col font-mono text-text-high">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={[
+                      "h-1.5 w-1.5 flex-none rounded-full",
+                      REACH_DOT[job.reachability.status],
+                    ].join(" ")}
+                    title={reachTooltip(
+                      job.reachability.status,
+                      job,
+                      playerLocationIcao,
+                    )}
+                    aria-label={reachTooltip(
+                      job.reachability.status,
+                      job,
+                      playerLocationIcao,
+                    )}
+                  />
+                  <span className="icao text-sm">{job.originIcao}</span>
+                  <span className="flex items-center gap-1 text-muted-faint">
+                    <svg width="22" height="6" viewBox="0 0 22 6" aria-hidden>
+                      <line
+                        x1="0"
+                        y1="3"
+                        x2="22"
+                        y2="3"
+                        stroke="currentColor"
+                        strokeDasharray="2 2"
+                      />
+                    </svg>
+                  </span>
+                  <span className="icao text-sm">{job.destinationIcao}</span>
+                </div>
+                {isFerry && job.ferryAircraft && (
+                  <div className="mt-0.5 flex items-baseline gap-2 truncate font-mono text-[10px] uppercase tracking-callsign text-sky-300/80">
+                    <span className="tracking-callsign text-sky-300">
+                      {job.ferryAircraft.tail}
+                    </span>
+                    <span className="text-muted-dim">·</span>
+                    <span className="truncate text-muted">
+                      {job.ferryAircraft.manufacturer} {job.ferryAircraft.model}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Distance */}

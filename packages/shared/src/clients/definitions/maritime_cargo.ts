@@ -12,6 +12,28 @@ const maritimeCargo: ClientDefinition = {
   reputationGateMin: 0,
   reputationGateMax: 50,
   standardTemplates: [
+    // Short-hop courier run, weighted heavily so a freshly-arrived player
+    // always has a CYHZ-origin sub-100nm option. CYAW is 14 nm south of
+    // CYHZ, well within a C152's range and payload. The elevated base
+    // multiplier compensates for the small distance term — narratively,
+    // MCE pays a flat retainer for short courier runs because the pure
+    // per-mile rate isn't worth a pilot's time.
+    {
+      weight: 3,
+      payloadType: "cargo",
+      payloadLbsRange: [80, 220],
+      minClass: "SEP",
+      requiredCapabilities: [],
+      urgency: "standard",
+      weatherSensitivity: "mild",
+      basePayMultiplier: 8.0,
+      routeTemplate: {
+        originCandidates: ["CYHZ"],
+        destinationCandidates: ["CYAW"],
+      },
+      description: () =>
+        "Short courier hop down to Shearwater — quick parcel transfer for the harbour office.",
+    },
     {
       weight: 1,
       payloadType: "cargo",

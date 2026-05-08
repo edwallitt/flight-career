@@ -6,6 +6,7 @@ const ROLES: { id: RoleFilter; label: string; code: string }[] = [
   { id: "air_taxi", label: "Air Taxi", code: "ATX" },
   { id: "light_jet", label: "Light Jet", code: "LJT" },
   { id: "open", label: "Open Market", code: "OPN" },
+  { id: "ferry", label: "Ferry", code: "FRY" },
 ];
 
 const CLASSES: { id: ClassFilter; label: string }[] = [
@@ -23,6 +24,9 @@ export function JobFilters({
   setClassFilter,
   reachableOnly,
   setReachableOnly,
+  atMyLocationOnly,
+  setAtMyLocationOnly,
+  playerLocationIcao,
   totalCount,
   filteredCount,
   onTickNow,
@@ -35,12 +39,18 @@ export function JobFilters({
   setClassFilter: (c: ClassFilter) => void;
   reachableOnly: boolean;
   setReachableOnly: (v: boolean) => void;
+  atMyLocationOnly: boolean;
+  setAtMyLocationOnly: (v: boolean) => void;
+  playerLocationIcao: string;
   totalCount: number;
   filteredCount: number;
   onTickNow: () => void;
   isTicking: boolean;
   lastTick?: { inserted: number; expired: number };
 }) {
+  const showDevTick =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("dev") === "1";
   return (
     <div className="flex items-stretch gap-6 border-b border-ink-600 bg-ink-800/40 px-6 py-3">
       {/* Role filter */}
@@ -125,6 +135,38 @@ export function JobFilters({
         </button>
       </div>
 
+      {/* At-my-location toggle: short-circuits the reposition step */}
+      <div className="flex flex-col gap-1.5">
+        <span className="label">Origin</span>
+        <button
+          type="button"
+          onClick={() => setAtMyLocationOnly(!atMyLocationOnly)}
+          disabled={!playerLocationIcao}
+          className={[
+            "relative inline-flex items-center gap-2 rounded-sm border px-3 py-1.5 font-mono text-[11px] uppercase tracking-callsign transition-colors disabled:opacity-40",
+            atMyLocationOnly
+              ? "border-emerald-500/60 bg-emerald-500/[0.08] text-emerald-300 hover:bg-emerald-500/[0.14]"
+              : "border-ink-600 bg-ink-750 text-muted-dim hover:text-text",
+          ].join(" ")}
+          aria-pressed={atMyLocationOnly}
+          title={
+            playerLocationIcao
+              ? `Show only jobs departing from ${playerLocationIcao}`
+              : "Player location unknown"
+          }
+        >
+          <span
+            className={[
+              "h-1.5 w-1.5 rounded-full",
+              atMyLocationOnly
+                ? "bg-emerald-400 shadow-[0_0_6px_rgba(74,222,128,0.55)]"
+                : "bg-ink-500",
+            ].join(" ")}
+          />
+          @ {playerLocationIcao || "—"}
+        </button>
+      </div>
+
       <div className="flex-1" />
 
       {/* Counts */}
@@ -166,21 +208,23 @@ export function JobFilters({
           </div>
         )}
 
-        {/* Force tick — primary dev affordance */}
-        <button
-          type="button"
-          onClick={onTickNow}
-          disabled={isTicking}
-          className="group relative inline-flex h-9 items-center gap-2 self-end rounded-sm border border-amber-deep bg-amber-glow/[0.06] px-4 font-mono text-[11px] uppercase tracking-callsign text-amber-glow transition-colors hover:bg-amber-glow/[0.12] hover:text-amber-warm disabled:opacity-40"
-        >
-          <span className="relative flex h-1.5 w-1.5">
-            {isTicking && (
-              <span className="absolute inset-0 animate-ping rounded-full bg-amber-glow/70" />
-            )}
-            <span className="relative h-1.5 w-1.5 rounded-full bg-amber-glow" />
-          </span>
-          {isTicking ? "Ticking…" : "Force tick"}
-        </button>
+        {/* Force tick — dev-only affordance, surfaced when ?dev=1 is set */}
+        {showDevTick && (
+          <button
+            type="button"
+            onClick={onTickNow}
+            disabled={isTicking}
+            className="group relative inline-flex h-9 items-center gap-2 self-end rounded-sm border border-amber-deep bg-amber-glow/[0.06] px-4 font-mono text-[11px] uppercase tracking-callsign text-amber-glow transition-colors hover:bg-amber-glow/[0.12] hover:text-amber-warm disabled:opacity-40"
+          >
+            <span className="relative flex h-1.5 w-1.5">
+              {isTicking && (
+                <span className="absolute inset-0 animate-ping rounded-full bg-amber-glow/70" />
+              )}
+              <span className="relative h-1.5 w-1.5 rounded-full bg-amber-glow" />
+            </span>
+            {isTicking ? "Ticking…" : "Force tick · DEV"}
+          </button>
+        )}
       </div>
     </div>
   );

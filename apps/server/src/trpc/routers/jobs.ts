@@ -39,15 +39,28 @@ export const jobsRouter = router({
         return { briefing: null, error: result.error };
       }
       const row = db
-        .select({ clientId: jobs.clientId })
+        .select({
+          clientId: jobs.clientId,
+          jobType: jobs.jobType,
+          ferrySource: jobs.ferrySource,
+          ferryOwnerName: jobs.ferryOwnerName,
+        })
         .from(jobs)
         .where(eq(jobs.id, input.jobId))
         .get();
-      const clientDef = row?.clientId ? getClientById(row.clientId) : undefined;
+      let dispatcherName: string | null = null;
+      if (row?.jobType === "ferry" && row.ferryOwnerName) {
+        dispatcherName =
+          row.ferrySource === "operator"
+            ? `Operations · ${row.ferryOwnerName}`
+            : row.ferryOwnerName;
+      } else if (row?.clientId) {
+        dispatcherName = getClientById(row.clientId)?.voice?.dispatcherName ?? null;
+      }
       return {
         briefing: result.briefing,
         source: result.source,
-        dispatcherName: clientDef?.voice?.dispatcherName ?? null,
+        dispatcherName,
       };
     }),
 

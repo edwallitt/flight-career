@@ -71,6 +71,10 @@ export interface AtlasJob {
   clientId: string | null;
   clientName: string | null;
   description: string;
+  jobType: "standard" | "ferry";
+  ferrySource: "owner" | "dealer" | "operator" | null;
+  ferryAircraftTail: string | null;
+  ferryAircraftLabel: string | null;
 }
 
 export interface AtlasPlayer {
@@ -188,6 +192,13 @@ const ROLE_COLOR: Record<AtlasJob["role"], string> = {
   open: "#7d7d7d",
 };
 
+// Ferries get their own color so a quick scan separates them from client work.
+const FERRY_LINE_COLOR = "#5da9d9";
+
+function jobLineColor(j: AtlasJob): string {
+  return j.jobType === "ferry" ? FERRY_LINE_COLOR : ROLE_COLOR[j.role];
+}
+
 
 const PLAYER_GREEN = "#5ec47c";
 
@@ -281,10 +292,11 @@ function buildJobLineFC(jobs: AtlasJob[]): FeatureCollection<LineString> {
       properties: {
         id: j.id,
         role: j.role,
-        roleColor: ROLE_COLOR[j.role],
+        roleColor: jobLineColor(j),
         urgency: j.urgency,
         requiredClass: j.requiredClass,
         distanceNm: j.distanceNm,
+        jobType: j.jobType,
       },
     })),
   };
@@ -301,7 +313,7 @@ function buildJobPointsFC(jobs: AtlasJob[]): FeatureCollection<Point> {
         id: j.id,
         kind: "origin",
         role: j.role,
-        roleColor: ROLE_COLOR[j.role],
+        roleColor: jobLineColor(j),
         requiredClass: j.requiredClass,
         distanceNm: j.distanceNm,
       },
@@ -317,7 +329,7 @@ function buildJobPointsFC(jobs: AtlasJob[]): FeatureCollection<Point> {
         id: j.id,
         kind: "destination",
         role: j.role,
-        roleColor: ROLE_COLOR[j.role],
+        roleColor: jobLineColor(j),
         requiredClass: j.requiredClass,
         distanceNm: j.distanceNm,
       },
@@ -991,6 +1003,15 @@ function installLayers(map: MlMap) {
     layout: { "line-cap": "round", "line-join": "round" },
     paint: {
       "line-color": ["get", "roleColor"],
+      // Ferries get a longer dash pattern so they're visually distinct from
+      // standard work even before the player notices the color shift.
+      "line-dasharray": [
+        "match",
+        ["get", "jobType"],
+        "ferry",
+        ["literal", [5, 3]],
+        ["literal", [3, 2]],
+      ],
       "line-width": [
         "case",
         ["boolean", ["feature-state", "hover"], false],
@@ -1027,7 +1048,6 @@ function installLayers(map: MlMap) {
           0.6,
         ],
       ],
-      "line-dasharray": [3, 2],
     },
   });
   map.addLayer({

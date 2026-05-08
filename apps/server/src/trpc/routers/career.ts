@@ -16,6 +16,7 @@ export interface CareerSnapshot {
   currentLocationName: string;
   simDateTime: number;
   startedAt: number;
+  isPaused: boolean;
 }
 
 const aircraftClass = z.enum(["SEP", "MEP", "SET", "JET"]);
@@ -36,10 +37,21 @@ export const careerRouter = router({
       currentLocationName: ap?.name ?? row.currentLocationIcao,
       simDateTime: row.simDateTime,
       startedAt: row.startedAt,
+      isPaused: row.isPaused,
     };
   }),
 
   snapshot: publicProcedure.query(() => getCareerSnapshot()),
+
+  setPaused: publicProcedure
+    .input(z.object({ paused: z.boolean() }))
+    .mutation(({ input }) => {
+      db.update(career)
+        .set({ isPaused: input.paused })
+        .where(eq(career.id, 1))
+        .run();
+      return { paused: input.paused };
+    }),
 
   bookExam: publicProcedure
     .input(z.object({ class: aircraftClass }))

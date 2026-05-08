@@ -1,5 +1,6 @@
 import type { BriefingContent } from "@flightcareer/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { trpc } from "../../trpc.js";
 import {
   formatPay,
@@ -11,7 +12,7 @@ import {
 import { AircraftCandidatesPanel } from "../active/AircraftCandidatesPanel.js";
 import { RouteMap } from "../../components/map/RouteMap.js";
 import type { AircraftSelection } from "../active/types.js";
-import type { ReachabilityStatus } from "./types.js";
+import type { JobDetail, ReachabilityStatus } from "./types.js";
 
 interface ReachabilityInfo {
   status: ReachabilityStatus;
@@ -43,14 +44,17 @@ function ReachabilityBanner({
   originIcao,
   playerLocationIcao,
   tailNumber,
+  onTravelToOrigin,
 }: {
   reachability: ReachabilityInfo;
   originIcao: string;
   playerLocationIcao: string;
   tailNumber: string | null;
+  onTravelToOrigin: () => void;
 }) {
   let tone = "";
   let text: React.ReactNode = "";
+  let action: React.ReactNode = null;
   switch (reachability.status) {
     case "at_origin":
       tone = "text-emerald-300 border-emerald-500/40 bg-emerald-500/[0.06]";
@@ -73,6 +77,15 @@ function ReachabilityBanner({
           <span className="icao">{playerLocationIcao}</span>
         </>
       );
+      action = (
+        <button
+          type="button"
+          onClick={onTravelToOrigin}
+          className="ml-auto rounded-sm border border-amber-deep bg-amber-glow/[0.10] px-2 py-1 font-mono text-[10px] uppercase tracking-callsign text-amber-glow transition-colors hover:bg-amber-glow/[0.18] hover:text-amber-warm"
+        >
+          ▸ Travel to {originIcao}
+        </button>
+      );
       break;
     case "unreachable":
       tone =
@@ -83,11 +96,12 @@ function ReachabilityBanner({
   return (
     <div
       className={[
-        "rounded-sm border px-3 py-2 font-mono text-[11px] uppercase tracking-callsign",
+        "flex items-center gap-3 rounded-sm border px-3 py-2 font-mono text-[11px] uppercase tracking-callsign",
         tone,
       ].join(" ")}
     >
-      {text}
+      <span>{text}</span>
+      {action}
     </div>
   );
 }
@@ -232,6 +246,7 @@ export function JobDrawer({
   reachability: ReachabilityInfo | null;
   playerLocationIcao: string;
 }) {
+  const navigate = useNavigate();
   const detail = trpc.jobs.getById.useQuery(
     { id: jobId ?? -1 },
     { enabled: jobId != null },
@@ -251,18 +266,34 @@ export function JobDrawer({
     { enabled: jobId != null },
   );
   const utils = trpc.useUtils();
+  const briefMutation = trpc.lifecycle.brief.useMutation({
+    onSuccess: () => {
+      utils.lifecycle.getActiveJob.invalidate();
+      utils.career.get.invalidate();
+    },
+  });
   const acceptMutation = trpc.lifecycle.accept.useMutation({
-    onSuccess: (result) => {
+    onSuccess: (result, _variables, _context) => {
       if (result.ok) {
         utils.jobs.list.invalidate();
         utils.lifecycle.getActiveJob.invalidate();
         utils.career.get.invalidate();
+        // Fast-path: when the chosen aircraft has enough fuel for the trip
+        // (or it's a rental), chain straight into brief with no uplift. Saves
+        // the player a trip through the briefing modal for the easy case.
+        if (canFastBriefRef.current) {
+          briefMutation.mutate({ fuelGallons: 0 });
+        }
         onClose();
       }
     },
   });
 
   const [selection, setSelection] = useState<AircraftSelection | null>(null);
+  // Capture fast-brief eligibility at click time. We can't read it from the
+  // mutation closure because react-query freezes the original handler — the
+  // ref bridges current-render state into the onSuccess callback.
+  const canFastBriefRef = useRef(false);
 
   // Reset selection whenever the drawer points to a different job.
   // `acceptMutation.reset` is referentially stable from useMutation, so
@@ -274,7 +305,8 @@ export function JobDrawer({
   }, [jobId, resetMutation]);
 
   const open = jobId != null;
-  const job = detail.data;
+  const job = detail.data as JobDetail | undefined;
+  const isFerry = job?.jobType === "ferry";
   const hasActiveJob = activeJob.data != null;
   const errorMsg =
     acceptMutation.data && !acceptMutation.data.ok
@@ -284,6 +316,8 @@ export function JobDrawer({
         : null;
 
   const isUnreachable = reachability?.status === "unreachable";
+  const ferryAtOrigin =
+    isFerry && job ? playerLocationIcao === job.originIcao : false;
 
   const selectedTypeId =
     selection?.source === "owned"
@@ -291,11 +325,22 @@ export function JobDrawer({
       : selection?.source === "rental"
         ? selection.rentalAircraftTypeId
         : null;
-  const selectedDisplay = selectedTypeId
+  const selectedRanked = selectedTypeId
     ? candidates.data?.ranked.find(
-        (r) => r.candidate.aircraftTypeId === selectedTypeId,
-      )?.display ?? null
+        (r) =>
+          r.candidate.aircraftTypeId === selectedTypeId &&
+          (selection?.source === "rental" ||
+            (selection?.source === "owned" &&
+              r.candidate.ownedAircraftId === selection.ownedAircraftId)),
+      ) ?? null
     : null;
+  const selectedDisplay = selectedRanked?.display ?? null;
+  // Skip the briefing screen when no fuel decision is needed: rentals are wet
+  // (always fuelled) and owned aircraft already at "sufficient" status pass
+  // briefJob's 60% floor with zero uplift.
+  const canFastBrief =
+    selectedRanked?.fuel.status === "rental" ||
+    selectedRanked?.fuel.status === "sufficient";
   const selectedTailNumber =
     selection?.source === "owned"
       ? candidates.data?.ranked.find(
@@ -331,8 +376,15 @@ export function JobDrawer({
             {job?.clientName ?? (job ? "Open Market" : "—")}
           </div>
           {job && (
-            <div className="font-mono text-[11px] uppercase tracking-callsign text-muted-dim">
-              {ROLE_LABEL[job.role] ?? job.role}
+            <div
+              className={[
+                "font-mono text-[11px] uppercase tracking-callsign",
+                isFerry ? "text-sky-300" : "text-muted-dim",
+              ].join(" ")}
+            >
+              {isFerry
+                ? `Ferry · ${job.ferrySource ? job.ferrySource.toUpperCase() : "CONTRACT"}`
+                : (ROLE_LABEL[job.role] ?? job.role)}
             </div>
           )}
         </div>
@@ -361,6 +413,9 @@ export function JobDrawer({
                 originIcao={job.originIcao}
                 playerLocationIcao={playerLocationIcao}
                 tailNumber={selectedTailNumber}
+                onTravelToOrigin={() =>
+                  navigate(`/jobs?travelTo=${job.originIcao}`)
+                }
               />
             )}
 
@@ -578,13 +633,58 @@ export function JobDrawer({
               </div>
             </div>
 
-            {/* Aircraft selection */}
-            <AircraftCandidatesPanel
-              jobId={job.id}
-              selection={selection}
-              onSelectionChange={setSelection}
-              hasActiveJob={hasActiveJob}
-            />
+            {/* Ferry: aircraft is fixed by the contract — no selection step. */}
+            {isFerry && job.ferryAircraft ? (
+              <>
+                <div className="rounded-sm border border-sky-500/40 bg-sky-500/[0.05] p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="label text-sky-300/80">The aircraft</span>
+                    <span className="h-px flex-1 bg-sky-500/20" />
+                  </div>
+                  <div className="mt-3 flex items-baseline gap-3">
+                    <span className="font-mono text-[22px] font-medium tracking-callsign text-text-high">
+                      {job.ferryAircraft.tail}
+                    </span>
+                    <span className="rounded-sm border border-sky-500/40 bg-sky-500/[0.08] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-callsign text-sky-300">
+                      {job.ferryAircraft.cls}
+                    </span>
+                  </div>
+                  <div className="mt-1 font-display text-[15px] text-text">
+                    {job.ferryAircraft.manufacturer} {job.ferryAircraft.model}
+                  </div>
+                  <div className="mt-3 flex items-center gap-3 font-mono text-tiny text-muted">
+                    <span>
+                      Currently at{" "}
+                      <span className="icao text-text-high">
+                        {job.originIcao}
+                      </span>
+                    </span>
+                    <span className="text-muted-faint">·</span>
+                    <span>
+                      ~{job.ferryAircraft.cruiseSpeedKts} kts cruise
+                    </span>
+                    <span className="text-muted-faint">·</span>
+                    <span>{job.ferryAircraft.rangeNm}nm range</span>
+                  </div>
+                </div>
+
+                <FerryAcceptancePanel
+                  job={job}
+                  playerLocationIcao={playerLocationIcao}
+                  reachability={reachability}
+                  onTravelToOrigin={() =>
+                    navigate(`/jobs?travelTo=${job.originIcao}`)
+                  }
+                />
+              </>
+            ) : (
+              <AircraftCandidatesPanel
+                jobId={job.id}
+                selection={selection}
+                onSelectionChange={setSelection}
+                hasActiveJob={hasActiveJob}
+              />
+            )}
           </>
         )}
       </div>
@@ -593,20 +693,31 @@ export function JobDrawer({
       <div className="border-t border-ink-600 bg-ink-800 px-6 py-4">
         <button
           type="button"
-          disabled={
-            !job ||
-            !selection ||
-            hasActiveJob ||
-            isUnreachable ||
-            acceptMutation.isPending
-          }
+          disabled={(() => {
+            if (!job || hasActiveJob || acceptMutation.isPending) return true;
+            if (isFerry) return !ferryAtOrigin;
+            return !selection || isUnreachable;
+          })()}
           title={
-            isUnreachable
-              ? "Cannot accept — no aircraft can reach the origin from your current location."
-              : undefined
+            isFerry && !ferryAtOrigin
+              ? "Travel to the aircraft's location before accepting."
+              : isUnreachable
+                ? "Cannot accept — no aircraft can reach the origin from your current location."
+                : undefined
           }
           onClick={() => {
-            if (!job || !selection) return;
+            if (!job) return;
+            if (isFerry) {
+              if (!ferryAtOrigin) return;
+              canFastBriefRef.current = true;
+              acceptMutation.mutate({
+                jobId: job.id,
+                aircraftSource: "ferry" as const,
+              });
+              return;
+            }
+            if (!selection) return;
+            canFastBriefRef.current = canFastBrief;
             const payload =
               selection.source === "owned"
                 ? {
@@ -626,7 +737,13 @@ export function JobDrawer({
           <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-amber-deep">
             ▸
           </span>
-          {acceptMutation.isPending ? "Accepting…" : "Accept job"}
+          {acceptMutation.isPending
+            ? "Accepting…"
+            : isFerry
+              ? "Accept ferry & brief"
+              : canFastBrief
+                ? "Accept & brief"
+                : "Accept job"}
           <span className="absolute right-3 top-1/2 -translate-y-1/2 font-mono text-[10px] text-amber-deep">
             ▸
           </span>
@@ -634,6 +751,16 @@ export function JobDrawer({
         <div className="mt-2 text-center font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
           {errorMsg ? (
             <span className="text-urgency-critical">{errorMsg}</span>
+          ) : isFerry ? (
+            !ferryAtOrigin ? (
+              <span className="text-amber-glow">
+                Travel to {job?.originIcao} before accepting
+              </span>
+            ) : hasActiveJob ? (
+              "Active job in progress — open it from the header"
+            ) : (
+              "Owner provides aircraft and fuel · pay on completion"
+            )
           ) : isUnreachable ? (
             <span className="text-urgency-critical">
               No aircraft can reach the origin from your current location
@@ -648,5 +775,90 @@ export function JobDrawer({
         </div>
       </div>
     </aside>
+  );
+}
+
+function FerryAcceptancePanel({
+  job,
+  playerLocationIcao,
+  reachability,
+  onTravelToOrigin,
+}: {
+  job: JobDetail;
+  playerLocationIcao: string;
+  reachability: ReachabilityInfo | null;
+  onTravelToOrigin: () => void;
+}) {
+  const ratingOk = reachability?.status !== "unreachable";
+  const atOrigin = playerLocationIcao === job.originIcao;
+  const positioningNm = reachability?.positioningDistanceNm;
+  return (
+    <div className="rounded-sm border border-ink-600 bg-ink-750 p-4">
+      <div className="flex items-center gap-2">
+        <span className="label">Ferry acceptance</span>
+        <span className="h-px flex-1 bg-ink-600" />
+      </div>
+
+      <ul className="mt-3 space-y-2 font-mono text-tiny">
+        <li className="flex items-center justify-between">
+          <span className="text-muted">
+            Rated for {job.requiredClass}
+          </span>
+          <span
+            className={
+              ratingOk ? "text-amber-glow" : "text-urgency-critical"
+            }
+          >
+            {ratingOk ? "✓ rated" : `✗ ${job.requiredClass} rating required`}
+          </span>
+        </li>
+        <li className="flex items-center justify-between">
+          <span className="text-muted">
+            At aircraft location ({job.originIcao})
+          </span>
+          <span
+            className={atOrigin ? "text-amber-glow" : "text-amber-warm"}
+          >
+            {atOrigin ? "✓ on site" : `✗ at ${playerLocationIcao || "—"}`}
+          </span>
+        </li>
+      </ul>
+
+      {!atOrigin && (
+        <div className="mt-3 rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-3">
+          <div className="font-mono text-tiny text-text-high">
+            You're at{" "}
+            <span className="icao">{playerLocationIcao || "—"}</span>.
+            Aircraft is at{" "}
+            <span className="icao">{job.originIcao}</span>
+            {positioningNm != null ? (
+              <>
+                {" "}
+                <span className="text-muted">({positioningNm}nm)</span>
+              </>
+            ) : null}
+            .
+          </div>
+          <div className="mt-1 font-mono text-tiny text-muted">
+            Travel commercially to the aircraft to start the ferry.
+          </div>
+          <button
+            type="button"
+            onClick={onTravelToOrigin}
+            className="mt-3 w-full rounded-sm border border-amber-deep bg-amber-glow/[0.08] py-1.5 font-mono text-[11px] uppercase tracking-callsign text-amber-glow hover:bg-amber-glow/[0.16] hover:text-amber-warm"
+          >
+            ▸ Travel to {job.originIcao}
+          </button>
+        </div>
+      )}
+
+      {atOrigin && (
+        <div className="mt-3 font-mono text-tiny text-muted">
+          Owner covers fuel, landing fees, and any maintenance. You collect
+          the ferry fee on completion. Block hours count toward your{" "}
+          {job.requiredClass} rating.
+        </div>
+      )}
+    </div>
   );
 }

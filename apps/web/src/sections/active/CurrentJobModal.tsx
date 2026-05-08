@@ -27,19 +27,39 @@ function useBodyScrollLock(): void {
   }, []);
 }
 
-const STATE_LABEL: Record<string, string> = {
-  accepted: "Accepted",
-  briefed: "Briefed · Fueled",
-  in_progress: "In flight",
-};
+type ActiveSource = "owned" | "rental" | "ferry";
 
-const STATE_NARRATIVE: Record<string, string> = {
-  accepted:
-    "Job committed. Aircraft is locked. Brief the flight to fuel up and lock in your departure plan.",
-  briefed:
-    "Pre-flight complete. Fuel paid. Cleared to begin the flight when you're ready in the sim.",
-  in_progress: "Flight underway in MSFS.",
-};
+function stateLabelFor(state: string, source: ActiveSource): string {
+  if (state === "accepted") {
+    if (source === "ferry") return "Accepted · Ferry";
+    return "Accepted";
+  }
+  if (state === "briefed") {
+    if (source === "ferry") return "Briefed · Ferry";
+    return source === "rental" ? "Briefed · Rental" : "Briefed · Fueled";
+  }
+  if (state === "in_progress") return "In flight";
+  return state;
+}
+
+function stateNarrativeFor(state: string, source: ActiveSource): string {
+  if (state === "accepted") {
+    if (source === "ferry") {
+      return "Ferry contract committed. Owner covers fuel and landing fees. Brief the flight to acknowledge the contract.";
+    }
+    return "Job committed. Aircraft is locked. Brief the flight to fuel up and lock in your departure plan.";
+  }
+  if (state === "briefed") {
+    if (source === "ferry") {
+      return "Ferry brief complete. Cleared to begin the flight when you're ready in the sim. Pay collected on completion.";
+    }
+    return source === "rental"
+      ? "Pre-flight complete. Wet rental locked in — fuel included, billed at completion. Cleared to begin the flight when you're ready in the sim."
+      : "Pre-flight complete. Fuel paid. Cleared to begin the flight when you're ready in the sim.";
+  }
+  if (state === "in_progress") return "Flight underway in MSFS.";
+  return "";
+}
 
 function formatBlockTime(distanceNm: number, kts: number): string {
   if (kts <= 0) return "—";
@@ -107,8 +127,15 @@ export function CurrentJobModal({
 
   const j = data.job;
   const a = data.aircraft;
-  const stateNarrative = STATE_NARRATIVE[data.state] ?? "";
-  const stateLabel = STATE_LABEL[data.state] ?? data.state;
+  const isRental = a.source === "rental";
+  const isFerry = a.source === "ferry";
+  const stateNarrative = stateNarrativeFor(data.state, a.source);
+  const stateLabel = stateLabelFor(data.state, a.source);
+  const tripBlockHours =
+    a.cruiseSpeedKts > 0 ? j.distanceNm / a.cruiseSpeedKts : 0;
+  const estRentalCostCents = Math.round(
+    tripBlockHours * a.rentalRatePerHour,
+  );
 
   // Server is the source of truth for the rep penalty; UI just reads it.
   const repHit = data.cancelPenalty;
@@ -138,7 +165,8 @@ export function CurrentJobModal({
               </span>
             </div>
             <div className="font-display text-2xl font-semibold tracking-tight text-text-high">
-              {ROLE_LABEL[j.role] ?? j.role} · {formatPay(j.pay)}
+              {isFerry ? "Ferry" : (ROLE_LABEL[j.role] ?? j.role)} ·{" "}
+              {formatPay(j.pay)}
             </div>
             <div className="font-mono text-tiny text-muted">{stateNarrative}</div>
           </div>
@@ -246,7 +274,7 @@ export function CurrentJobModal({
           </div>
 
           {/* Brief / fuel summary */}
-          {data.state === "briefed" && (
+          {data.state === "briefed" && !isRental && (
             <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
               <div className="flex items-center justify-between">
                 <span className="label text-amber-glow/80">Fuel briefed</span>
@@ -277,6 +305,37 @@ export function CurrentJobModal({
             </div>
           )}
 
+          {data.state === "briefed" && isRental && (
+            <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
+              <div className="flex items-center justify-between">
+                <span className="label text-amber-glow/80">Wet rental</span>
+                <span className="font-mono text-tiny text-muted-dim">
+                  fuel included · billed at completion
+                </span>
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-x-6 gap-y-2 font-mono text-text-high">
+                <div className="flex flex-col">
+                  <span className="label">Hourly rate</span>
+                  <span className="mt-0.5 tabular-nums">
+                    {formatCash(a.rentalRatePerHour)}/hr
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="label">Est. block</span>
+                  <span className="mt-0.5 tabular-nums">
+                    {tripBlockHours.toFixed(1)} hrs
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="label">Est. cost</span>
+                  <span className="mt-0.5 tabular-nums text-amber-warm">
+                    {formatCash(estRentalCostCents)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Cancel confirmation */}
           {confirmCancel && (
             <div className="rounded-sm border border-urgency-critical/60 bg-urgency-critical/[0.06] p-4">
@@ -296,7 +355,7 @@ export function CurrentJobModal({
                     </>
                   )}
                 </li>
-                {data.state === "briefed" && (
+                {data.state === "briefed" && !isRental && (
                   <li>
                     Fuel cost{" "}
                     <span className="text-urgency-critical">

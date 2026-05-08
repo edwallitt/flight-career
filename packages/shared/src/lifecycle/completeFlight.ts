@@ -19,8 +19,9 @@ export interface CompleteFlightInput {
   jobUrgency: Urgency;
   weatherSensitivity: WeatherSensitivity;
 
-  // Aircraft context
-  aircraftSource: "owned" | "rental";
+  // Aircraft context. "ferry" = the player flies someone else's aircraft on a
+  // ferry contract — owner covers fuel/maintenance, player just gets the fee.
+  aircraftSource: "owned" | "rental" | "ferry";
   aircraftTypeId: string;
   aircraftClass: AircraftClass;
   ownedAircraftId: number | null;

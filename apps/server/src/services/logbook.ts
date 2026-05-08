@@ -48,7 +48,7 @@ export interface FlightLogRow {
   netCents: number;
   notes: string | null;
   outcome: "completed" | "diverted" | "failed";
-  aircraftSource: "owned" | "rental";
+  aircraftSource: "owned" | "rental" | "ferry";
   aircraftLabel: string;
   aircraftClass: AircraftClass;
   aircraftTypeId: string;
@@ -56,6 +56,7 @@ export interface FlightLogRow {
   clientName: string | null;
   clientId: string | null;
   jobRole: "bush" | "air_taxi" | "light_jet" | "open" | null;
+  jobType: "standard" | "ferry";
   isDiversion: boolean;
 }
 
@@ -149,29 +150,45 @@ export function getFlights(filters: FlightFilters = {}): FlightsResult {
     const job = f.jobId != null ? jobsById.get(f.jobId) ?? null : null;
 
     const ownedRow = f.ownedAircraftId != null ? ownedById.get(f.ownedAircraftId) ?? null : null;
+    const isFerry = job?.jobType === "ferry";
+    // Ferry flights have no owned row (someone else's aircraft), but we
+    // persisted the rented type id at completion so the type lookup still
+    // works. Treat them as their own source for the UI.
     const typeId =
       ownedRow?.aircraftTypeId ?? f.rentalAircraftTypeId ?? null;
     const typeRow = typeId ? typeById.get(typeId) ?? null : null;
 
-    const aircraftSource: "owned" | "rental" = f.ownedAircraftId != null
-      ? "owned"
-      : "rental";
+    const aircraftSource: "owned" | "rental" | "ferry" =
+      isFerry
+        ? "ferry"
+        : f.ownedAircraftId != null
+          ? "owned"
+          : "rental";
 
-    const aircraftLabel = ownedRow && typeRow
-      ? `${ownedRow.tailNumber} · ${typeRow.model}`
-      : typeRow
-        ? `Rental: ${typeRow.manufacturer} ${typeRow.model}`
-        : "Unknown aircraft";
+    const aircraftLabel = (() => {
+      if (isFerry && job?.ferryAircraftTail && typeRow) {
+        return `Ferry: ${job.ferryAircraftTail} · ${typeRow.manufacturer} ${typeRow.model}`;
+      }
+      if (ownedRow && typeRow) {
+        return `${ownedRow.tailNumber} · ${typeRow.model}`;
+      }
+      if (typeRow) {
+        return `Rental: ${typeRow.manufacturer} ${typeRow.model}`;
+      }
+      return "Unknown aircraft";
+    })();
 
     const originAp = airportByIcao.get(f.originIcao);
     const destAp = airportByIcao.get(f.destinationIcao);
 
     const clientId = job?.clientId ?? null;
-    const clientName = clientId
-      ? clientNameFromId(clientId)
-      : job
-        ? "Open Market"
-        : null;
+    const clientName = isFerry
+      ? job?.ferryOwnerName ?? "Ferry"
+      : clientId
+        ? clientNameFromId(clientId)
+        : job
+          ? "Open Market"
+          : null;
 
     const isDiversion =
       job != null && f.destinationIcao !== job.destinationIcao;
@@ -210,6 +227,7 @@ export function getFlights(filters: FlightFilters = {}): FlightsResult {
       clientName,
       clientId,
       jobRole: job?.role ?? null,
+      jobType: job?.jobType ?? "standard",
       isDiversion,
     };
   });

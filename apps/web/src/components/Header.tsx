@@ -2,6 +2,23 @@ import { trpc } from "../trpc.js";
 import { formatCash, formatSimDateTime } from "../lib/formatters.js";
 import { ActiveJobPill } from "../sections/active/ActiveJobPill.js";
 
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+      <rect x="6" y="5" width="4" height="14" rx="0.5" />
+      <rect x="14" y="5" width="4" height="14" rx="0.5" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden>
+      <path d="M7 5.5v13a.5.5 0 0 0 .77.42l10-6.5a.5.5 0 0 0 0-.84l-10-6.5A.5.5 0 0 0 7 5.5z" />
+    </svg>
+  );
+}
+
 function StatBlock({
   label,
   value,
@@ -83,15 +100,20 @@ export function Header({
   onOpenActiveJob: () => void;
   onOpenTravel: () => void;
 }) {
+  const utils = trpc.useUtils();
   const career = trpc.career.get.useQuery(undefined, {
     refetchInterval: 5_000,
   });
   const activeJob = trpc.lifecycle.getActiveJob.useQuery(undefined, {
     refetchInterval: 5_000,
   });
+  const setPaused = trpc.career.setPaused.useMutation({
+    onSuccess: () => utils.career.get.invalidate(),
+  });
 
   const data = career.data;
   const activeJobBlock = activeJob.data != null;
+  const isPaused = data?.isPaused ?? false;
 
   return (
     <header className="flex shrink-0 items-stretch border-b border-ink-600 bg-ink-800/60 backdrop-blur-sm">
@@ -150,15 +172,47 @@ export function Header({
         <ActiveJobPill onOpen={onOpenActiveJob} />
       </div>
 
-      {/* Right rail: status + settings */}
+      {/* Right rail: status + pause + settings */}
       <div className="flex items-center gap-4 border-l border-ink-600 px-5">
-        <div className="flex items-center gap-2 font-mono text-micro uppercase tracking-callsign text-muted-dim">
+        <div
+          className={[
+            "flex items-center gap-2 font-mono text-micro uppercase tracking-callsign",
+            isPaused ? "text-urgency-urgent" : "text-muted-dim",
+          ].join(" ")}
+        >
           <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inset-0 animate-ping rounded-full bg-amber-glow/60" />
-            <span className="relative h-1.5 w-1.5 rounded-full bg-amber-glow" />
+            {isPaused ? (
+              <span className="relative h-1.5 w-1.5 rounded-full bg-urgency-urgent" />
+            ) : (
+              <>
+                <span className="absolute inset-0 animate-ping rounded-full bg-amber-glow/60" />
+                <span className="relative h-1.5 w-1.5 rounded-full bg-amber-glow" />
+              </>
+            )}
           </span>
-          Live · trpc
+          {isPaused ? "Paused" : "Live · trpc"}
         </div>
+        <button
+          type="button"
+          onClick={() => setPaused.mutate({ paused: !isPaused })}
+          disabled={setPaused.isPending || !data}
+          aria-label={isPaused ? "Resume sim" : "Pause sim"}
+          aria-pressed={isPaused}
+          title={
+            isPaused
+              ? "Resume sim — time advances, jobs expire, fuel drifts"
+              : "Pause sim — freeze time to plan a flight"
+          }
+          className={[
+            "flex h-8 items-center gap-2 rounded-sm border px-3 font-mono text-[11px] uppercase tracking-callsign transition-colors disabled:opacity-40",
+            isPaused
+              ? "border-urgency-urgent bg-urgency-urgent/[0.08] text-urgency-urgent hover:bg-urgency-urgent/[0.16]"
+              : "border-ink-600 bg-ink-750 text-muted hover:border-amber-deep hover:text-amber-glow",
+          ].join(" ")}
+        >
+          {isPaused ? <PlayIcon /> : <PauseIcon />}
+          {isPaused ? "Resume" : "Pause"}
+        </button>
         <button
           type="button"
           className="flex h-8 w-8 items-center justify-center rounded-sm border border-ink-600 bg-ink-750 text-muted hover:border-amber-deep hover:text-amber-glow"

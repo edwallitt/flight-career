@@ -169,7 +169,7 @@ function adjustReputation(scope: string, delta: number, simNow: number): void {
 
 export interface AcceptJobInput {
   jobId: number;
-  aircraftSource: "owned" | "rental";
+  aircraftSource: "owned" | "rental" | "ferry";
   ownedAircraftId?: number;
   rentalAircraftTypeId?: string;
 }
@@ -195,6 +195,56 @@ export function acceptJob(input: AcceptJobInput): LifecycleResult {
     // strictly less than simNow (sweep uses `lt`).
     if (jobRow.expiresAt < careerRow.simDateTime) {
       return { ok: false, error: "Job has expired" };
+    }
+
+    // Ferry contracts: no aircraft selection step, the aircraft *is* the job.
+    if (input.aircraftSource === "ferry") {
+      if (jobRow.jobType !== "ferry") {
+        return { ok: false, error: "Job is not a ferry contract" };
+      }
+      if (!jobRow.ferryAircraftTypeId) {
+        return { ok: false, error: "Ferry aircraft type missing on job" };
+      }
+      if (careerRow.currentLocationIcao !== jobRow.originIcao) {
+        return {
+          ok: false,
+          error: `You must be at ${jobRow.originIcao} to accept this ferry`,
+        };
+      }
+      const ratingRow = tx
+        .select()
+        .from(ratings)
+        .where(eq(ratings.class, jobRow.requiredClass))
+        .get();
+      if (!ratingRow?.earned) {
+        return {
+          ok: false,
+          error: `You are not rated for ${jobRow.requiredClass}`,
+        };
+      }
+
+      tx.update(jobs)
+        .set({ status: "accepted", acceptedAt: careerRow.simDateTime })
+        .where(eq(jobs.id, input.jobId))
+        .run();
+
+      // Reuse activeAircraftRentalTypeId to carry the ferry aircraft's type id
+      // — both rentals and ferries are typed-aircraft-only (no owned row), so
+      // every consumer of activeAircraftType() resolves them the same way.
+      tx.update(career)
+        .set({
+          activeJobId: input.jobId,
+          activeAircraftSource: "ferry",
+          activeAircraftOwnedId: null,
+          activeAircraftRentalTypeId: jobRow.ferryAircraftTypeId,
+          activeFlightState: "accepted",
+          briefedFuelGallons: null,
+          briefedFuelCostCents: null,
+        })
+        .where(eq(career.id, 1))
+        .run();
+
+      return { ok: true };
     }
 
     // Resolve the chosen aircraft to an AircraftCandidate.
@@ -394,7 +444,8 @@ export function cancelAcceptedJob(): LifecycleResult {
     // If the active aircraft has crossed a hard maintenance limit since
     // accept, the player can't dispatch. Cancelling under that condition
     // is forced — waive the reputation penalty.
-    let waiveRepPenalty = false;
+    // Ferries also waive: there's no client to upset and the role is "open".
+    let waiveRepPenalty = careerRow.activeAircraftSource === "ferry";
     if (
       careerRow.activeAircraftSource === "owned" &&
       careerRow.activeAircraftOwnedId != null
@@ -578,8 +629,12 @@ export function briefJob(input: BriefJobInput): BriefResult {
     if (!typeRow) return { ok: false, error: "Aircraft type not found" };
 
     // Rental path: wet rate includes fuel — no uplift, no separate cost.
-    // Aircraft is conceptually delivered fueled and ready.
-    if (careerRow.activeAircraftSource === "rental") {
+    // Ferry path: owner provides the aircraft fueled. Same shape as rental
+    // here; brief just acknowledges the contract and advances state.
+    if (
+      careerRow.activeAircraftSource === "rental" ||
+      careerRow.activeAircraftSource === "ferry"
+    ) {
       tx.update(career)
         .set({
           activeFlightState: "briefed",
@@ -717,7 +772,7 @@ export function briefJob(input: BriefJobInput): BriefResult {
 // ---------------------------------------------------------------------------
 
 export interface ActiveAircraftInfo {
-  source: "owned" | "rental";
+  source: "owned" | "rental" | "ferry";
   aircraftTypeId: string;
   manufacturer: string;
   model: string;
@@ -738,12 +793,20 @@ export interface ActiveAircraftInfo {
   currentLocationIcao: string;
 }
 
+export interface ActiveJobFerryInfo {
+  source: "owner" | "dealer" | "operator";
+  ownerName: string;
+  tail: string;
+}
+
 export interface ActiveJobSnapshot {
   state: "accepted" | "briefed" | "in_progress";
   job: {
     id: number;
     clientId: string | null;
     role: "bush" | "air_taxi" | "light_jet" | "open";
+    jobType: "standard" | "ferry";
+    ferry: ActiveJobFerryInfo | null;
     originIcao: string;
     originName: string;
     destinationIcao: string;
@@ -886,7 +949,8 @@ export function getActiveJob(): ActiveJobSnapshot | null {
     typeRow.fuelBurnGph,
   );
   const recommendedUplift =
-    careerRow.activeAircraftSource === "rental"
+    careerRow.activeAircraftSource === "rental" ||
+    careerRow.activeAircraftSource === "ferry"
       ? 0
       : recommendedFuelUplift({
           distanceNm,
@@ -899,10 +963,25 @@ export function getActiveJob(): ActiveJobSnapshot | null {
   // Cancel penalty surfaced to the UI depends on lifecycle state. accepted/
   // briefed use the cancel magnitudes; in_progress uses the abort magnitudes
   // (a different code path, but the player sees one "back out" cost).
-  const penalty =
-    careerRow.activeFlightState === "in_progress"
-      ? ABORT_REP_PENALTY
-      : REP_HIT_BY_STATE[careerRow.activeFlightState];
+  // Ferries have no client/role to upset, so cancelling is consequence-free.
+  const penalty: { role: number; client: number } =
+    careerRow.activeAircraftSource === "ferry"
+      ? { role: 0, client: 0 }
+      : careerRow.activeFlightState === "in_progress"
+        ? ABORT_REP_PENALTY
+        : REP_HIT_BY_STATE[careerRow.activeFlightState];
+
+  const ferryInfo: ActiveJobFerryInfo | null =
+    jobRow.jobType === "ferry" &&
+    jobRow.ferrySource &&
+    jobRow.ferryOwnerName &&
+    jobRow.ferryAircraftTail
+      ? {
+          source: jobRow.ferrySource,
+          ownerName: jobRow.ferryOwnerName,
+          tail: jobRow.ferryAircraftTail,
+        }
+      : null;
 
   return {
     state: careerRow.activeFlightState,
@@ -910,6 +989,8 @@ export function getActiveJob(): ActiveJobSnapshot | null {
       id: jobRow.id,
       clientId: jobRow.clientId,
       role: jobRow.role,
+      jobType: jobRow.jobType,
+      ferry: ferryInfo,
       originIcao: jobRow.originIcao,
       originName: origin.name,
       destinationIcao: jobRow.destinationIcao,
@@ -1217,6 +1298,7 @@ export function completeFlightAction(
       aircraftTypeId: typeRow.id,
       aircraftClass: typeRow.class,
       ownedAircraftId: ownedAircraftRow?.id ?? null,
+      // Ferries: owner pays for aircraft time. Player only collects the fee.
       rentalRatePerHourCents:
         careerRow.activeAircraftSource === "rental"
           ? typeRow.rentalRatePerHour

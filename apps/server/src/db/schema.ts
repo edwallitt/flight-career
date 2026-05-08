@@ -73,7 +73,7 @@ export const career = sqliteTable("career", {
   // together: cleared on completion or cancellation, populated on accept.
   activeJobId: integer("active_job_id").references((): AnySQLiteColumn => jobs.id),
   activeAircraftSource: text("active_aircraft_source", {
-    enum: ["owned", "rental"],
+    enum: ["owned", "rental", "ferry"],
   }),
   activeAircraftOwnedId: integer("active_aircraft_owned_id").references(
     (): AnySQLiteColumn => ownedAircraft.id,
@@ -87,6 +87,10 @@ export const career = sqliteTable("career", {
   briefedFuelGallons: real("briefed_fuel_gallons"),
   briefedFuelCostCents: integer("briefed_fuel_cost_cents"),
   flightStartedAt: integer("flight_started_at"),
+  // Player-controlled pause. When true, the server's tick loop is a no-op
+  // (sim time stops, jobs don't expire, fuel drift halts, marketplace freezes).
+  // The Force-tick mutation still works so dev tooling is unaffected.
+  isPaused: integer("is_paused", { mode: "boolean" }).notNull().default(false),
 });
 
 export const ratings = sqliteTable("ratings", {
@@ -232,6 +236,19 @@ export const jobs = sqliteTable("jobs", {
   acceptedAt: integer("accepted_at"),
   completedAt: integer("completed_at"),
   reputationDeltasJson: text("reputation_deltas_json"),
+  // Ferry/repositioning jobs — null/'standard' for normal jobs.
+  jobType: text("job_type", { enum: ["standard", "ferry"] })
+    .notNull()
+    .default("standard"),
+  // The aircraft *is* the job for ferries: type, generated tail, hiring party.
+  ferryAircraftTypeId: text("ferry_aircraft_type_id").references(
+    () => aircraftTypes.id,
+  ),
+  ferryAircraftTail: text("ferry_aircraft_tail"),
+  ferrySource: text("ferry_source", {
+    enum: ["owner", "dealer", "operator"],
+  }),
+  ferryOwnerName: text("ferry_owner_name"),
 });
 
 // =============================================================================

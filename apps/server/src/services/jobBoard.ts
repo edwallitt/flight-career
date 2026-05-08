@@ -1,11 +1,15 @@
 import {
   ALL_CLIENTS,
   computeReachability,
+  generateFerryJob,
   getClientById,
   haversineNm,
   runGenerationTick,
   type AircraftClass,
   type AirportLite,
+  type FerryAircraftType,
+  type FerryAirportLite,
+  type GeneratedFerry,
   type GeneratedJob,
   type JobReachability,
   type Role,
@@ -32,6 +36,9 @@ import {
 const TARGET_BOARD_SIZE = 12;
 const SIM_MINUTES_PER_TICK = 30;
 
+// Tunable: target proportion of new jobs that are ferry/repositioning jobs.
+const FERRY_JOB_PROPORTION = 0.3;
+
 const ROLES: Role[] = ["bush", "air_taxi", "light_jet"];
 
 function rngFromCryptoSeed(): () => number {
@@ -52,6 +59,35 @@ function buildAirportsLite(): AirportLite[] {
     size: a.size,
     hasPavedRunway: a.hasPavedRunway,
   }));
+}
+
+function buildFerryAirportsLite(): FerryAirportLite[] {
+  return db.select().from(airports).all().map((a) => ({
+    icao: a.icao,
+    lat: a.lat,
+    lon: a.lon,
+    size: a.size,
+    hasPavedRunway: a.hasPavedRunway,
+    hasMaintenance: a.hasMaintenance,
+  }));
+}
+
+function buildFerryAircraftTypes(): Array<
+  FerryAircraftType & { manufacturer: string; model: string }
+> {
+  return db
+    .select()
+    .from(aircraftTypes)
+    .all()
+    .map((t) => ({
+      id: t.id,
+      class: t.class,
+      cruiseSpeedKts: t.cruiseSpeedKts,
+      rangeNm: t.rangeNm,
+      basePurchasePriceCents: t.basePurchasePrice,
+      manufacturer: t.manufacturer,
+      model: t.model,
+    }));
 }
 
 function loadReputationByRole(): Record<Role, number> {
@@ -80,6 +116,14 @@ function currentBoardSize(): number {
   return db.select().from(jobs).where(eq(jobs.status, "open")).all().length;
 }
 
+function homeOriginJobCount(playerLocationIcao: string): number {
+  return db
+    .select()
+    .from(jobs)
+    .where(and(eq(jobs.status, "open"), eq(jobs.originIcao, playerLocationIcao)))
+    .all().length;
+}
+
 function expireStaleJobs(simNow: number): number {
   const result = db
     .update(jobs)
@@ -87,6 +131,69 @@ function expireStaleJobs(simNow: number): number {
     .where(and(eq(jobs.status, "open"), lt(jobs.expiresAt, simNow)))
     .run();
   return Number(result.changes ?? 0);
+}
+
+function insertFerries(ferries: GeneratedFerry[]): void {
+  if (ferries.length === 0) return;
+  for (const f of ferries) {
+    if (!(f.distanceNm > 0)) {
+      throw new Error(
+        `Refusing to insert ferry with distanceNm=${f.distanceNm} (${f.originIcao} → ${f.destinationIcao})`,
+      );
+    }
+  }
+  db.insert(jobs)
+    .values(
+      ferries.map((f) => ({
+        clientId: null,
+        role: "open" as const,
+        originIcao: f.originIcao,
+        destinationIcao: f.destinationIcao,
+        payloadLbs: f.payloadLbs,
+        payloadType: "cargo" as const,
+        paxCount: f.paxCount,
+        requiredClass: f.minClass,
+        requiredCapabilitiesJson: JSON.stringify([]),
+        pay: f.payCents,
+        generatedAt: f.generatedAt,
+        // Reuse the latest-departure as expiry: ferries don't sit on the board
+        // forever — once the dispatch window closes, the contract goes elsewhere.
+        expiresAt: f.scheduleLatest,
+        earliestDeparture: f.scheduleEarliest,
+        latestDeparture: f.scheduleLatest,
+        urgency: f.urgency,
+        weatherSensitivity: f.weatherSensitivity,
+        legsJson: null,
+        description: f.description,
+        distanceNm: f.distanceNm,
+        status: "open" as const,
+        jobType: "ferry" as const,
+        ferryAircraftTypeId: f.ferryAircraftTypeId,
+        ferryAircraftTail: f.ferryAircraftTail,
+        ferrySource: f.ferrySource,
+        ferryOwnerName: f.ferryOwnerName,
+      })),
+    )
+    .run();
+}
+
+function rollFerryCount(
+  standardCount: number,
+  deficit: number,
+  rng: () => number,
+): number {
+  if (deficit <= 0) return 0;
+  // Solve f / (s + f) = p ⇒ f = s · p / (1−p). The fractional part rounds
+  // stochastically so the long-run mix tracks FERRY_JOB_PROPORTION.
+  const ratio = FERRY_JOB_PROPORTION / (1 - FERRY_JOB_PROPORTION);
+  const target = standardCount * ratio;
+  const whole = Math.floor(target);
+  const frac = target - whole;
+  let count = whole + (rng() < frac ? 1 : 0);
+  // Quiet ticks (board near full, no standard jobs created) still occasionally
+  // surface a ferry — without this the board can sit ferry-free for a while.
+  if (standardCount === 0 && rng() < FERRY_JOB_PROPORTION) count = 1;
+  return Math.max(0, Math.min(deficit, count));
 }
 
 function insertGenerated(generated: GeneratedJob[]): void {
@@ -245,19 +352,63 @@ export function tickJobGeneration(): TickResult {
   const fuelDrift = maybeRunFuelDrift(simNow);
 
   const airportsLite = buildAirportsLite();
+  const playerLocationIcao = careerRow.currentLocationIcao;
+  const rng = rngFromCryptoSeed();
   const generated = runGenerationTick(ALL_CLIENTS, {
     airports: airportsLite,
     reputationByRole: loadReputationByRole(),
     reputationByClient: loadReputationByClient(),
     simNow,
-    rng: rngFromCryptoSeed(),
+    rng,
     currentBoardSize: currentBoardSize(),
     targetBoardSize: TARGET_BOARD_SIZE,
+    playerLocationIcao,
+    homeOriginJobCount: homeOriginJobCount(playerLocationIcao),
   });
 
   insertGenerated(generated);
 
-  return { expired, inserted: generated.length, fuelDrift };
+  // Mix in ferry/repositioning jobs to about FERRY_JOB_PROPORTION of new jobs.
+  // Capped to remaining board deficit so a busy board doesn't blow past target.
+  // currentBoardSize() re-queries post-insert so it already includes the
+  // standard jobs we just persisted — don't double-subtract.
+  const remainingDeficit = Math.max(
+    0,
+    TARGET_BOARD_SIZE - currentBoardSize(),
+  );
+  const ferryCount = rollFerryCount(generated.length, remainingDeficit, rng);
+  const ferries: GeneratedFerry[] = [];
+  if (ferryCount > 0) {
+    const ferryAirports = buildFerryAirportsLite();
+    const ferryTypes = buildFerryAircraftTypes();
+    for (let i = 0; i < ferryCount; i++) {
+      const f = generateFerryJob({
+        airports: ferryAirports,
+        aircraftTypes: ferryTypes,
+        rng,
+        simNow,
+      });
+      if (f) ferries.push(f);
+    }
+    insertFerries(ferries);
+  }
+
+  return {
+    expired,
+    inserted: generated.length + ferries.length,
+    fuelDrift,
+  };
+}
+
+export interface FerryAircraftSummary {
+  aircraftTypeId: string;
+  manufacturer: string;
+  model: string;
+  cls: "SEP" | "MEP" | "SET" | "JET";
+  cruiseSpeedKts: number;
+  rangeNm: number;
+  fuelType: "avgas" | "jet-a";
+  tail: string;
 }
 
 export interface JobListItem {
@@ -281,6 +432,10 @@ export interface JobListItem {
   urgency: "flexible" | "standard" | "urgent" | "critical";
   weatherSensitivity: "none" | "mild" | "strict";
   status: "open" | "accepted" | "in_progress" | "completed" | "expired" | "cancelled";
+  jobType: "standard" | "ferry";
+  ferrySource: "owner" | "dealer" | "operator" | null;
+  ferryOwnerName: string | null;
+  ferryAircraft: FerryAircraftSummary | null;
 }
 
 function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
@@ -293,10 +448,31 @@ function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
   } catch {
     capabilities = [];
   }
+  const isFerry = row.jobType === "ferry";
+  let ferryAircraft: FerryAircraftSummary | null = null;
+  if (isFerry && row.ferryAircraftTypeId && row.ferryAircraftTail) {
+    const t = db
+      .select()
+      .from(aircraftTypes)
+      .where(eq(aircraftTypes.id, row.ferryAircraftTypeId))
+      .get();
+    if (t) {
+      ferryAircraft = {
+        aircraftTypeId: t.id,
+        manufacturer: t.manufacturer,
+        model: t.model,
+        cls: t.class,
+        cruiseSpeedKts: t.cruiseSpeedKts,
+        rangeNm: t.rangeNm,
+        fuelType: t.fuelType,
+        tail: row.ferryAircraftTail,
+      };
+    }
+  }
   return {
     id: row.id,
     clientId: row.clientId,
-    clientName: client?.name ?? null,
+    clientName: isFerry ? row.ferryOwnerName : (client?.name ?? null),
     role: row.role,
     originIcao: row.originIcao,
     destinationIcao: row.destinationIcao,
@@ -314,6 +490,10 @@ function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
     urgency: row.urgency,
     weatherSensitivity: row.weatherSensitivity,
     status: row.status,
+    jobType: row.jobType,
+    ferrySource: row.ferrySource ?? null,
+    ferryOwnerName: row.ferryOwnerName ?? null,
+    ferryAircraft,
   };
 }
 
@@ -391,23 +571,49 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     airportRows.map((a) => [a.icao, { lat: a.lat, lon: a.lon }]),
   );
 
-  const enriched = items.map<JobListItemWithReachability>((job) => ({
-    ...job,
-    reachability: computeReachability(
-      {
-        originIcao: job.originIcao,
-        requiredClass: job.requiredClass,
-        requiredCapabilities: job.requiredCapabilities,
-      },
-      {
-        playerLocationIcao,
-        playerRatings,
-        ownedAircraft: ownedAircraftCtx,
-        rentalsAtPlayerLocation,
-        airports: airportMap,
-      },
-    ),
-  }));
+  const enriched = items.map<JobListItemWithReachability>((job) => {
+    // Ferries don't need an owned/rental aircraft to reach the origin —
+    // the contract aircraft is provided. Reachability collapses to a
+    // commercial-travel question: are you at the origin or not?
+    if (job.jobType === "ferry") {
+      if (!playerRatings[job.requiredClass]) {
+        return { ...job, reachability: { status: "unreachable" } };
+      }
+      if (job.originIcao === playerLocationIcao) {
+        return { ...job, reachability: { status: "at_origin" } };
+      }
+      const ap1 = airportMap.get(playerLocationIcao);
+      const ap2 = airportMap.get(job.originIcao);
+      const distance =
+        ap1 && ap2
+          ? Math.round(haversineNm(ap1, ap2))
+          : undefined;
+      return {
+        ...job,
+        reachability: {
+          status: "reposition_rental",
+          ...(distance != null ? { positioningDistanceNm: distance } : {}),
+        },
+      };
+    }
+    return {
+      ...job,
+      reachability: computeReachability(
+        {
+          originIcao: job.originIcao,
+          requiredClass: job.requiredClass,
+          requiredCapabilities: job.requiredCapabilities,
+        },
+        {
+          playerLocationIcao,
+          playerRatings,
+          ownedAircraft: ownedAircraftCtx,
+          rentalsAtPlayerLocation,
+          airports: airportMap,
+        },
+      ),
+    };
+  });
 
   return { jobs: enriched, playerLocationIcao };
 }

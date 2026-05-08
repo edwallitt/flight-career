@@ -17,6 +17,7 @@ export function JobBoard() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [classFilter, setClassFilter] = useState<ClassFilter>("any");
   const [reachableOnly, setReachableOnly] = useState(true);
+  const [atMyLocationOnly, setAtMyLocationOnly] = useState(false);
   const [sort, setSort] = useState<SortState>({ key: "pay", dir: "desc" });
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
@@ -39,7 +40,14 @@ export function JobBoard() {
 
   const filteredJobs = useMemo(() => {
     return allJobs.filter((j) => {
-      if (roleFilter !== "all" && j.role !== roleFilter) return false;
+      if (roleFilter === "ferry") {
+        if (j.jobType !== "ferry") return false;
+      } else if (roleFilter !== "all") {
+        // Non-ferry filters check the role; ferry rows have role="open" but
+        // shouldn't appear under the OPN chip — they have their own FRY chip.
+        if (j.jobType === "ferry") return false;
+        if (j.role !== roleFilter) return false;
+      }
       if (
         classFilter !== "any" &&
         CLASS_RANK[j.requiredClass]! < CLASS_RANK[classFilter]!
@@ -49,9 +57,12 @@ export function JobBoard() {
       if (reachableOnly && j.reachability.status === "unreachable") {
         return false;
       }
+      if (atMyLocationOnly && j.originIcao !== playerLocationIcao) {
+        return false;
+      }
       return true;
     });
-  }, [allJobs, roleFilter, classFilter, reachableOnly]);
+  }, [allJobs, roleFilter, classFilter, reachableOnly, atMyLocationOnly, playerLocationIcao]);
 
   const simNow = career.data?.simDateTime ?? Date.now();
   const drawerOpen = selectedId != null;
@@ -117,6 +128,9 @@ export function JobBoard() {
         setClassFilter={setClassFilter}
         reachableOnly={reachableOnly}
         setReachableOnly={setReachableOnly}
+        atMyLocationOnly={atMyLocationOnly}
+        setAtMyLocationOnly={setAtMyLocationOnly}
+        playerLocationIcao={playerLocationIcao}
         totalCount={allJobs.length}
         filteredCount={filteredJobs.length}
         onTickNow={() => tickNow.mutate()}
