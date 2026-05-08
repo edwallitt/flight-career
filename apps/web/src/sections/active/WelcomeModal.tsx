@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { trpc } from "../../trpc.js";
+import { CornerTicks } from "../../components/CornerTicks.js";
 
 const STORAGE_KEY = "flightcareer.welcomeSeen";
 
@@ -41,10 +42,7 @@ export function WelcomeModal() {
         className="relative w-[560px] max-w-[92vw] overflow-hidden rounded-sm border border-amber-deep/60 bg-ink-800 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <span className="pointer-events-none absolute left-3 top-3 block h-2 w-2 border-l border-t border-amber-deep/70" />
-        <span className="pointer-events-none absolute right-3 top-3 block h-2 w-2 border-r border-t border-amber-deep/70" />
-        <span className="pointer-events-none absolute left-3 bottom-3 block h-2 w-2 border-l border-b border-amber-deep/70" />
-        <span className="pointer-events-none absolute right-3 bottom-3 block h-2 w-2 border-r border-b border-amber-deep/70" />
+        <CornerTicks />
 
         <div className="border-b border-ink-600 px-7 pt-6 pb-4">
           <div className="flex items-center gap-2 font-mono text-micro uppercase tracking-callsign text-amber-glow">

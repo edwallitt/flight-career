@@ -6,7 +6,6 @@ import {
   haversineNm,
   runGenerationTick,
   type AircraftClass,
-  type AirportLite,
   type FerryAircraftType,
   type FerryAirportLite,
   type GeneratedFerry,
@@ -14,7 +13,7 @@ import {
   type JobReachability,
   type Role,
 } from "@flightcareer/shared";
-import { and, eq, lt, ne } from "drizzle-orm";
+import { and, count, eq, inArray, lt, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
@@ -51,17 +50,10 @@ function rngFromCryptoSeed(): () => number {
   };
 }
 
-function buildAirportsLite(): AirportLite[] {
-  return db.select().from(airports).all().map((a) => ({
-    icao: a.icao,
-    lat: a.lat,
-    lon: a.lon,
-    size: a.size,
-    hasPavedRunway: a.hasPavedRunway,
-  }));
-}
-
-function buildFerryAirportsLite(): FerryAirportLite[] {
+function buildAirportsLite(): FerryAirportLite[] {
+  // FerryAirportLite is a structural superset of AirportLite (adds
+  // hasMaintenance), so callers expecting AirportLite[] accept this directly
+  // and we avoid scanning the airports table twice per tick.
   return db.select().from(airports).all().map((a) => ({
     icao: a.icao,
     lat: a.lat,
@@ -90,38 +82,39 @@ function buildFerryAircraftTypes(): Array<
     }));
 }
 
-function loadReputationByRole(): Record<Role, number> {
+function loadReputation(): {
+  byRole: Record<Role, number>;
+  byClient: Record<string, number>;
+} {
   const rows = db.select().from(reputation).all();
-  const out: Record<Role, number> = { bush: 0, air_taxi: 0, light_jet: 0 };
+  const byRole: Record<Role, number> = { bush: 0, air_taxi: 0, light_jet: 0 };
+  const byClient: Record<string, number> = {};
   for (const row of rows) {
     if (ROLES.includes(row.scope as Role)) {
-      out[row.scope as Role] = row.score;
+      byRole[row.scope as Role] = row.score;
+    } else if (row.scope.startsWith("client:")) {
+      byClient[row.scope.slice("client:".length)] = row.score;
     }
   }
-  return out;
-}
-
-function loadReputationByClient(): Record<string, number> {
-  const rows = db.select().from(reputation).all();
-  const out: Record<string, number> = {};
-  for (const row of rows) {
-    if (row.scope.startsWith("client:")) {
-      out[row.scope.slice("client:".length)] = row.score;
-    }
-  }
-  return out;
+  return { byRole, byClient };
 }
 
 function currentBoardSize(): number {
-  return db.select().from(jobs).where(eq(jobs.status, "open")).all().length;
+  const row = db
+    .select({ n: count() })
+    .from(jobs)
+    .where(eq(jobs.status, "open"))
+    .get();
+  return row?.n ?? 0;
 }
 
 function homeOriginJobCount(playerLocationIcao: string): number {
-  return db
-    .select()
+  const row = db
+    .select({ n: count() })
     .from(jobs)
     .where(and(eq(jobs.status, "open"), eq(jobs.originIcao, playerLocationIcao)))
-    .all().length;
+    .get();
+  return row?.n ?? 0;
 }
 
 function expireStaleJobs(simNow: number): number {
@@ -354,10 +347,11 @@ export function tickJobGeneration(): TickResult {
   const airportsLite = buildAirportsLite();
   const playerLocationIcao = careerRow.currentLocationIcao;
   const rng = rngFromCryptoSeed();
+  const reputationMaps = loadReputation();
   const generated = runGenerationTick(ALL_CLIENTS, {
     airports: airportsLite,
-    reputationByRole: loadReputationByRole(),
-    reputationByClient: loadReputationByClient(),
+    reputationByRole: reputationMaps.byRole,
+    reputationByClient: reputationMaps.byClient,
     simNow,
     rng,
     currentBoardSize: currentBoardSize(),
@@ -379,11 +373,10 @@ export function tickJobGeneration(): TickResult {
   const ferryCount = rollFerryCount(generated.length, remainingDeficit, rng);
   const ferries: GeneratedFerry[] = [];
   if (ferryCount > 0) {
-    const ferryAirports = buildFerryAirportsLite();
     const ferryTypes = buildFerryAircraftTypes();
     for (let i = 0; i < ferryCount; i++) {
       const f = generateFerryJob({
-        airports: ferryAirports,
+        airports: airportsLite,
         aircraftTypes: ferryTypes,
         rng,
         simNow,
@@ -438,7 +431,12 @@ export interface JobListItem {
   ferryAircraft: FerryAircraftSummary | null;
 }
 
-function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
+type AircraftTypeRow = typeof aircraftTypes.$inferSelect;
+
+function rowToListItem(
+  row: typeof jobs.$inferSelect,
+  ferryTypeById: Map<string, AircraftTypeRow>,
+): JobListItem {
   const client = row.clientId ? getClientById(row.clientId) : undefined;
   let capabilities: string[] = [];
   try {
@@ -451,11 +449,7 @@ function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
   const isFerry = row.jobType === "ferry";
   let ferryAircraft: FerryAircraftSummary | null = null;
   if (isFerry && row.ferryAircraftTypeId && row.ferryAircraftTail) {
-    const t = db
-      .select()
-      .from(aircraftTypes)
-      .where(eq(aircraftTypes.id, row.ferryAircraftTypeId))
-      .get();
+    const t = ferryTypeById.get(row.ferryAircraftTypeId);
     if (t) {
       ferryAircraft = {
         aircraftTypeId: t.id,
@@ -497,6 +491,26 @@ function rowToListItem(row: typeof jobs.$inferSelect): JobListItem {
   };
 }
 
+function loadFerryTypeMap(
+  rows: ReadonlyArray<typeof jobs.$inferSelect>,
+): Map<string, AircraftTypeRow> {
+  const ferryTypeIds = new Set<string>();
+  for (const row of rows) {
+    if (row.jobType === "ferry" && row.ferryAircraftTypeId) {
+      ferryTypeIds.add(row.ferryAircraftTypeId);
+    }
+  }
+  const map = new Map<string, AircraftTypeRow>();
+  if (ferryTypeIds.size === 0) return map;
+  const types = db
+    .select()
+    .from(aircraftTypes)
+    .where(inArray(aircraftTypes.id, [...ferryTypeIds]))
+    .all();
+  for (const t of types) map.set(t.id, t);
+  return map;
+}
+
 export function getOpenJobs(): JobListItem[] {
   const rows = db
     .select()
@@ -504,7 +518,8 @@ export function getOpenJobs(): JobListItem[] {
     .where(eq(jobs.status, "open"))
     .all();
   rows.sort((a, b) => b.generatedAt - a.generatedAt);
-  return rows.map(rowToListItem);
+  const ferryTypeById = loadFerryTypeMap(rows);
+  return rows.map((row) => rowToListItem(row, ferryTypeById));
 }
 
 export interface JobListItemWithReachability extends JobListItem {
@@ -632,7 +647,8 @@ export interface JobDetail extends JobListItem {
 export function getJobById(id: number): JobDetail | null {
   const row = db.select().from(jobs).where(eq(jobs.id, id)).get();
   if (!row) return null;
-  const list = rowToListItem(row);
+  const ferryTypeById = loadFerryTypeMap([row]);
+  const list = rowToListItem(row, ferryTypeById);
   const client = row.clientId ? getClientById(row.clientId) : undefined;
   const originAp = db
     .select()

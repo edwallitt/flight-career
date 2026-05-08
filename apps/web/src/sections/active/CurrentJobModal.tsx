@@ -6,6 +6,7 @@ import {
   formatSimDateTime,
   ROLE_LABEL,
 } from "../../lib/formatters.js";
+import { CornerTicks } from "../../components/CornerTicks.js";
 
 function useEscape(onClose: () => void): void {
   useEffect(() => {
@@ -67,17 +68,6 @@ function formatBlockTime(distanceNm: number, kts: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return `${h}h ${m.toString().padStart(2, "0")}m`;
-}
-
-function CornerTicks() {
-  return (
-    <>
-      <span className="pointer-events-none absolute left-3 top-3 block h-2 w-2 border-l border-t border-amber-deep/70" />
-      <span className="pointer-events-none absolute right-3 top-3 block h-2 w-2 border-r border-t border-amber-deep/70" />
-      <span className="pointer-events-none absolute left-3 bottom-3 block h-2 w-2 border-l border-b border-amber-deep/70" />
-      <span className="pointer-events-none absolute right-3 bottom-3 block h-2 w-2 border-r border-b border-amber-deep/70" />
-    </>
-  );
 }
 
 export function CurrentJobModal({

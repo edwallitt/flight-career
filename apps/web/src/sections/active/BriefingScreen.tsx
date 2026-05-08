@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "../../trpc.js";
 import { formatCash } from "../../lib/formatters.js";
+import { CornerTicks } from "../../components/CornerTicks.js";
 import { type RiskTier } from "@flightcareer/shared";
 
 type RiskInfo = {
@@ -200,73 +201,68 @@ function FuelBar({
   );
 }
 
-function RentalFuelPanel({
-  rangeNm,
-  cruiseSpeedKts,
-  tripDistanceNm,
-}: {
-  rangeNm: number;
-  cruiseSpeedKts: number;
-  tripDistanceNm: number;
-}) {
-  const tripHours = cruiseSpeedKts > 0 ? tripDistanceNm / cruiseSpeedKts : 0;
-  return (
-    <div className="rounded-sm border border-amber-deep/60 bg-amber-glow/[0.04] p-4">
-      <div className="flex items-center gap-2">
-        <span className="label text-amber-glow/80">Fuel</span>
-        <span className="h-px flex-1 bg-amber-deep/40" />
-        <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
-          included
-        </span>
-      </div>
-      <div className="mt-3 font-mono text-[12px] text-text-high">
-        Wet rental — fuel included in hourly rate
-      </div>
-      <div className="mt-1 font-mono text-tiny text-muted">
-        Aircraft will be fueled and ready at departure.
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-amber-deep/30 pt-3 font-mono text-tiny text-muted-dim">
-        <div className="flex flex-col">
-          <span className="label">Spec range</span>
-          <span className="mt-0.5 tabular-nums text-text">~{fmtNm(rangeNm)} nm</span>
-        </div>
-        <div className="flex flex-col">
-          <span className="label">Trip block</span>
-          <span className="mt-0.5 tabular-nums text-text">
-            ~{tripHours.toFixed(1)} hrs · {fmtNm(tripDistanceNm)} nm
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
+type WetFuelVariant = "rental" | "ferry";
 
-function FerryFuelPanel({
+const WET_FUEL_THEME: Record<
+  WetFuelVariant,
+  {
+    container: string;
+    labelText: string;
+    divider: string;
+    tagText: string;
+    tag: string;
+    hairline: string;
+    body: string;
+    detail: string;
+  }
+> = {
+  rental: {
+    container: "border-amber-deep/60 bg-amber-glow/[0.04]",
+    labelText: "text-amber-glow/80",
+    divider: "bg-amber-deep/40",
+    tagText: "text-amber-glow",
+    tag: "included",
+    hairline: "border-amber-deep/30",
+    body: "Wet rental — fuel included in hourly rate",
+    detail: "Aircraft will be fueled and ready at departure.",
+  },
+  ferry: {
+    container: "border-sky-500/40 bg-sky-500/[0.05]",
+    labelText: "text-sky-300/80",
+    divider: "bg-sky-500/20",
+    tagText: "text-sky-300",
+    tag: "owner-supplied",
+    hairline: "border-sky-500/20",
+    body: "Ferry contract — fuel and landing fees on the owner's account",
+    detail: "Aircraft will be fueled and ready at departure.",
+  },
+};
+
+function WetFuelPanel({
+  variant,
   rangeNm,
   cruiseSpeedKts,
   tripDistanceNm,
 }: {
+  variant: WetFuelVariant;
   rangeNm: number;
   cruiseSpeedKts: number;
   tripDistanceNm: number;
 }) {
   const tripHours = cruiseSpeedKts > 0 ? tripDistanceNm / cruiseSpeedKts : 0;
+  const t = WET_FUEL_THEME[variant];
   return (
-    <div className="rounded-sm border border-sky-500/40 bg-sky-500/[0.05] p-4">
+    <div className={`rounded-sm border p-4 ${t.container}`}>
       <div className="flex items-center gap-2">
-        <span className="label text-sky-300/80">Fuel</span>
-        <span className="h-px flex-1 bg-sky-500/20" />
-        <span className="font-mono text-[10px] uppercase tracking-callsign text-sky-300">
-          owner-supplied
+        <span className={`label ${t.labelText}`}>Fuel</span>
+        <span className={`h-px flex-1 ${t.divider}`} />
+        <span className={`font-mono text-[10px] uppercase tracking-callsign ${t.tagText}`}>
+          {t.tag}
         </span>
       </div>
-      <div className="mt-3 font-mono text-[12px] text-text-high">
-        Ferry contract — fuel and landing fees on the owner's account
-      </div>
-      <div className="mt-1 font-mono text-tiny text-muted">
-        Aircraft will be fueled at {tripDistanceNm > 0 ? "departure" : "the ramp"}.
-      </div>
-      <div className="mt-4 grid grid-cols-2 gap-3 border-t border-sky-500/20 pt-3 font-mono text-tiny text-muted-dim">
+      <div className="mt-3 font-mono text-[12px] text-text-high">{t.body}</div>
+      <div className="mt-1 font-mono text-tiny text-muted">{t.detail}</div>
+      <div className={`mt-4 grid grid-cols-2 gap-3 border-t pt-3 font-mono text-tiny text-muted-dim ${t.hairline}`}>
         <div className="flex flex-col">
           <span className="label">Spec range</span>
           <span className="mt-0.5 tabular-nums text-text">~{fmtNm(rangeNm)} nm</span>
@@ -516,17 +512,6 @@ function OwnedFuelPanel(props: {
   );
 }
 
-function CornerTicks() {
-  return (
-    <>
-      <span className="pointer-events-none absolute left-4 top-4 block h-2 w-2 border-l border-t border-amber-deep/70" />
-      <span className="pointer-events-none absolute right-4 top-4 block h-2 w-2 border-r border-t border-amber-deep/70" />
-      <span className="pointer-events-none absolute left-4 bottom-4 block h-2 w-2 border-l border-b border-amber-deep/70" />
-      <span className="pointer-events-none absolute right-4 bottom-4 block h-2 w-2 border-r border-b border-amber-deep/70" />
-    </>
-  );
-}
-
 export function BriefingScreen({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const active = trpc.lifecycle.getActiveJob.useQuery();
@@ -627,7 +612,7 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
         className="relative m-auto flex max-h-[94vh] w-[1080px] max-w-[96vw] flex-col border border-ink-600 bg-ink-800 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <CornerTicks />
+        <CornerTicks inset={4} />
 
         {/* Header strap */}
         <div className="flex items-center justify-between border-b border-ink-600 bg-ink-850 px-8 py-4">
@@ -737,13 +722,15 @@ export function BriefingScreen({ onClose }: { onClose: () => void }) {
             </div>
 
             {isFerry ? (
-              <FerryFuelPanel
+              <WetFuelPanel
+                variant="ferry"
                 rangeNm={a.rangeNm}
                 cruiseSpeedKts={a.cruiseSpeedKts}
                 tripDistanceNm={j.distanceNm}
               />
             ) : isRental ? (
-              <RentalFuelPanel
+              <WetFuelPanel
+                variant="rental"
                 rangeNm={a.rangeNm}
                 cruiseSpeedKts={a.cruiseSpeedKts}
                 tripDistanceNm={j.distanceNm}

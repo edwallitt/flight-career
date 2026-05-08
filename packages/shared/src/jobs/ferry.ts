@@ -83,6 +83,24 @@ const SOURCE_CLASS_BIAS: Record<FerrySourceType, Record<AircraftClass, number>> 
   operator: { SEP: 0.3, MEP: 0.6, SET: 1.4, JET: 1.7 },
 };
 
+const CLASS_WEIGHTS_BY_SOURCE: Record<
+  FerrySourceType,
+  { value: AircraftClass; weight: number }[]
+> = {
+  owner: FERRY_CLASS_WEIGHTS.map((c) => ({
+    value: c.value,
+    weight: c.weight * SOURCE_CLASS_BIAS.owner[c.value],
+  })),
+  dealer: FERRY_CLASS_WEIGHTS.map((c) => ({
+    value: c.value,
+    weight: c.weight * SOURCE_CLASS_BIAS.dealer[c.value],
+  })),
+  operator: FERRY_CLASS_WEIGHTS.map((c) => ({
+    value: c.value,
+    weight: c.weight * SOURCE_CLASS_BIAS.operator[c.value],
+  })),
+};
+
 // Operators / dealers don't reposition aircraft to remote bush strips.
 const SIZE_WEIGHT_BY_CLASS: Record<
   AircraftClass,
@@ -167,11 +185,7 @@ function pickClassForSource(
   rng: () => number,
   source: FerrySourceType,
 ): AircraftClass {
-  const items = FERRY_CLASS_WEIGHTS.map((c) => ({
-    value: c.value,
-    weight: c.weight * SOURCE_CLASS_BIAS[source][c.value],
-  }));
-  return weightedPick(rng, items);
+  return weightedPick(rng, CLASS_WEIGHTS_BY_SOURCE[source]);
 }
 
 function pickOriginForClass(
