@@ -170,6 +170,26 @@ function insertFerries(ferries: GeneratedFerry[]): void {
     .run();
 }
 
+// Generate and insert N ferry jobs immediately, bypassing the standard tick's
+// rollFerryCount probability. Used by the seed pre-warm so a brand-new career
+// always sees ferry contracts on the board, not subject to RNG variance.
+export function seedFerryJobs(
+  count: number,
+  simNow: number,
+  rng: () => number,
+): number {
+  if (count <= 0) return 0;
+  const airports = buildAirportsLite();
+  const types = buildFerryAircraftTypes();
+  const ferries: GeneratedFerry[] = [];
+  for (let i = 0; i < count; i++) {
+    const f = generateFerryJob({ airports, aircraftTypes: types, rng, simNow });
+    if (f) ferries.push(f);
+  }
+  insertFerries(ferries);
+  return ferries.length;
+}
+
 function rollFerryCount(
   standardCount: number,
   deficit: number,

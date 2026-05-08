@@ -15,7 +15,7 @@ import {
 import { aircraftSeed } from "./seed-data/aircraft.js";
 import { airportSeed } from "./seed-data/airports.js";
 import { ensureFuelPriceCurrent } from "../services/fuelDrift.js";
-import { tickJobGeneration } from "../services/jobBoard.js";
+import { seedFerryJobs, tickJobGeneration } from "../services/jobBoard.js";
 import { refreshMarketplace, rngFromSeed } from "../services/marketplace.js";
 
 const RATING_CLASSES = ["SEP", "MEP", "SET", "JET"] as const;
@@ -244,6 +244,12 @@ async function seed() {
     .all().length;
   if (openJobCount === 0) {
     seedFirstFlightJob(careerSimNow);
+    // Guarantee ferry contracts on a fresh board. The pre-warm ticks below also
+    // roll ferries probabilistically (FERRY_JOB_PROPORTION ~30%), but that's
+    // RNG-dependent — a new career could open with zero ferries. Pre-seeding a
+    // baseline removes that variance so the player always sees the third
+    // career path on day one.
+    seedFerryJobs(4, careerSimNow, rngFromSeed(0x5eed_FE22));
     for (let i = 0; i < 6; i++) tickJobGeneration();
   }
 
