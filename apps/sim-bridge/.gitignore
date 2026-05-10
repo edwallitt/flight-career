@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+
+# Microsoft licenses the SimConnect managed assembly with MSFS — users supply
+# their own copy from the SDK install. Do not commit it.
+lib/Microsoft.FlightSimulator.SimConnect.dll
