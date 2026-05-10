@@ -280,6 +280,10 @@ export const flights = sqliteTable("flights", {
     .notNull()
     .default("completed"),
   notes: text("notes"),
+  // AI-generated dispatcher acknowledgment shown in the completion summary and
+  // logbook drawer. Null when generation was skipped (no API key) or failed —
+  // the UI just omits the section.
+  dispatcherSignoff: text("dispatcher_signoff"),
 });
 
 export const maintenanceEvents = sqliteTable("maintenance_events", {

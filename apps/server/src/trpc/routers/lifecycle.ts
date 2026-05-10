@@ -2,12 +2,14 @@ import { z } from "zod";
 import {
   abortFlight,
   acceptJob,
+  applyDispatcherSignoff,
   beginFlight,
   briefJob,
   cancelAcceptedJob,
   completeFlightAction,
   getActiveJob,
 } from "../../services/jobLifecycle.js";
+import { generateSignoff } from "../../services/signoffGenerator.js";
 import { publicProcedure, router } from "../trpc.js";
 
 const acceptInput = z
@@ -49,7 +51,17 @@ export const lifecycleRouter = router({
         fuelBurnedGal: z.number().nonnegative().optional(),
       }),
     )
-    .mutation(({ input }) => completeFlightAction(input)),
+    .mutation(async ({ input }) => {
+      const result = completeFlightAction(input);
+      if (!result.ok) return result;
+      const signoff = await applyDispatcherSignoff(
+        result.signoff,
+        generateSignoff,
+      );
+      // Patch the response with the generated signoff (or leave it null).
+      result.summary.dispatcherSignoff = signoff;
+      return { ok: true as const, summary: result.summary };
+    }),
 
   abort: publicProcedure.mutation(() => abortFlight()),
 });

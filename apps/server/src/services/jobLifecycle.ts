@@ -37,9 +37,12 @@ export {
 
 export {
   abortFlight,
+  applyDispatcherSignoff,
   completeFlightAction,
   type CompleteFlightActionInput,
   type CompleteFlightActionResult,
   type CompletionSummaryPayload,
+  type DispatcherSignoffPayload,
+  type PostCompletionSignoffContext,
   type PostFlightUnscheduledEvent,
 } from "./jobLifecycle/complete.js";

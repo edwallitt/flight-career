@@ -1,5 +1,6 @@
 import {
   ALL_CLIENTS,
+  FERRY_VOICE_PROFILES,
   getClientById,
   type AircraftClass,
 } from "@flightcareer/shared";
@@ -58,6 +59,13 @@ export interface FlightLogRow {
   jobRole: "bush" | "air_taxi" | "light_jet" | "open" | null;
   jobType: "standard" | "ferry";
   isDiversion: boolean;
+  // AI-generated dispatcher acknowledgment, persisted with the flight row.
+  // Null for older flights (before the feature) or when generation was skipped.
+  dispatcherSignoff: {
+    message: string;
+    dispatcherName: string | null;
+    sourceLabel: string | null;
+  } | null;
 }
 
 export interface FlightFilters {
@@ -195,6 +203,33 @@ export function getFlights(filters: FlightFilters = {}): FlightsResult {
 
     const plannedAp = job ? airportByIcao.get(job.destinationIcao) : null;
 
+    // Build the signoff payload (message + byline) the drawer renders.
+    let dispatcherSignoff: FlightLogRow["dispatcherSignoff"] = null;
+    if (f.dispatcherSignoff) {
+      let dispatcherName: string | null = null;
+      let sourceLabel: string | null = null;
+      if (isFerry && job?.ferrySource && job.ferryOwnerName) {
+        const profile = FERRY_VOICE_PROFILES[job.ferrySource];
+        dispatcherName = profile.dispatcherTemplate.replace(
+          "{ownerName}",
+          job.ferryOwnerName,
+        );
+        sourceLabel =
+          job.ferrySource === "owner" ? null : job.ferryOwnerName;
+      } else if (clientId) {
+        const def = getClientById(clientId);
+        dispatcherName = def?.voice?.dispatcherName ?? null;
+        sourceLabel = def?.name ?? null;
+      } else if (job) {
+        dispatcherName = "Anonymous broker";
+      }
+      dispatcherSignoff = {
+        message: f.dispatcherSignoff,
+        dispatcherName,
+        sourceLabel,
+      };
+    }
+
     return {
       id: f.id,
       jobId: f.jobId,
@@ -229,6 +264,7 @@ export function getFlights(filters: FlightFilters = {}): FlightsResult {
       jobRole: job?.role ?? null,
       jobType: job?.jobType ?? "standard",
       isDiversion,
+      dispatcherSignoff,
     };
   });
 

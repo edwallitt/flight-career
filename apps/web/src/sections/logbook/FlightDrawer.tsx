@@ -190,6 +190,29 @@ export function FlightDrawer({
               )}
             </div>
 
+            {flight.dispatcherSignoff && (
+              <div className="rounded-sm border-l-2 border-amber-deep/70 bg-ink-750 px-4 py-3">
+                <div className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+                  Dispatcher sign-off
+                </div>
+                <p className="mt-2 font-display text-[13px] italic leading-relaxed text-text-high">
+                  &ldquo;{flight.dispatcherSignoff.message}&rdquo;
+                </p>
+                {(() => {
+                  const s = flight.dispatcherSignoff;
+                  const byline =
+                    s.dispatcherName && s.sourceLabel
+                      ? `${s.dispatcherName}, ${s.sourceLabel}`
+                      : s.dispatcherName ?? s.sourceLabel ?? null;
+                  return byline ? (
+                    <div className="mt-2 font-mono text-tiny text-muted">
+                      — {byline}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            )}
+
             {/* Stats */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-sm border border-ink-600 bg-ink-750 p-4">
               <Field label="Departed">

@@ -1,0 +1,1 @@
+ALTER TABLE `flights` ADD `dispatcher_signoff` text;

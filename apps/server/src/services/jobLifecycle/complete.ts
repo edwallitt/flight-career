@@ -1,15 +1,19 @@
 import {
+  FERRY_VOICE_PROFILES,
   assessRisk,
   completeFlight,
   generateEvent,
+  getClientById,
   haversineNm,
   type CompleteFlightInput,
   type CompleteFlightOutput,
   type RiskAssessment,
   type RiskTier,
+  type SignoffPromptInput,
+  type SignoffReputationTier,
   type UnscheduledEvent,
 } from "@flightcareer/shared";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import {
   aircraftTypes,
@@ -20,6 +24,7 @@ import {
   maintenanceEvents,
   ownedAircraft,
   ratings,
+  reputation,
 } from "../../db/schema.js";
 import {
   ABORT_REP_PENALTY,
@@ -60,10 +65,21 @@ export interface PostFlightUnscheduledEvent extends UnscheduledEvent {
   scheduledCompletionAt: number | null;
 }
 
+export interface DispatcherSignoffPayload {
+  message: string;
+  dispatcherName: string | null;
+  sourceLabel: string | null;
+}
+
 export interface CompletionSummaryPayload extends CompleteFlightOutput {
+  flightId: number;
   inspectionAlerts: string[];
   cashAppliedNow: number;
   unscheduledEvent: PostFlightUnscheduledEvent | null;
+  // Generated asynchronously after the txn commits, then merged into the
+  // response. Null when no API key, generation failed, or validation rejected
+  // the output — the UI just omits the section.
+  dispatcherSignoff: DispatcherSignoffPayload | null;
   // Geographic route data so the summary modal can render an actual chart.
   // `planned*` differs from actual when the pilot diverted.
   route: {
@@ -83,8 +99,19 @@ export interface CompletionSummaryPayload extends CompleteFlightOutput {
   };
 }
 
+export interface PostCompletionSignoffContext {
+  flightId: number;
+  promptInput: SignoffPromptInput;
+  dispatcherName: string | null;
+  sourceLabel: string | null;
+}
+
 export type CompleteFlightActionResult =
-  | { ok: true; summary: CompletionSummaryPayload }
+  | {
+      ok: true;
+      summary: CompletionSummaryPayload;
+      signoff: PostCompletionSignoffContext;
+    }
   | { ok: false; error: string };
 
 function flightOutcome(
@@ -94,6 +121,21 @@ function flightOutcome(
   if (summary.diversionAdjustment < 0) return "diverted";
   return "completed";
 }
+
+// Flight-count buckets ladder from "unproven" (no prior flights) up through
+// "top" (15+ flights + sustained high reputation). Score only escalates the
+// top of the ladder — a one-flight pilot can't be "high" no matter how good
+// the rep score is.
+function tierForSignoff(
+  flightsWithThisClient: number,
+  clientRepScore: number,
+): SignoffReputationTier {
+  if (flightsWithThisClient === 0) return "unproven";
+  if (flightsWithThisClient <= 3) return "novice";
+  if (flightsWithThisClient <= 15) return "mid";
+  return clientRepScore >= 85 ? "top" : "high";
+}
+
 
 export function completeFlightAction(
   input: CompleteFlightActionInput,
@@ -435,7 +477,8 @@ export function completeFlightAction(
     const flightEndedAt =
       flightStartedAt + summary.flightLogEntry.blockTimeMinutes * 60_000;
     const outcome = flightOutcome(summary);
-    tx.insert(flights)
+    const flightInsert = tx
+      .insert(flights)
       .values({
         jobId: jobRow.id,
         ownedAircraftId: ownedAircraftRow?.id ?? null,
@@ -453,6 +496,7 @@ export function completeFlightAction(
         notes: summary.flightLogEntry.notes,
       })
       .run();
+    const flightId = Number(flightInsert.lastInsertRowid);
 
     // Job: mark completed, store rep deltas
     tx.update(jobs)
@@ -467,11 +511,103 @@ export function completeFlightAction(
     const cashAppliedNow =
       summary.netCashDelta - (unscheduledOut?.costCents ?? 0);
 
+    // -----------------------------------------------------------------
+    // Sign-off context — gathered inside the txn so we have a consistent
+    // snapshot. Generation itself runs after commit (async, can fail).
+    // -----------------------------------------------------------------
+    const isFerryJob = jobRow.jobType === "ferry";
+    const clientDef = jobRow.clientId ? getClientById(jobRow.clientId) : undefined;
+
+    let priorFlightsWithClient = 0;
+    let clientRepScore = 0;
+    if (!isFerryJob && jobRow.clientId) {
+      // Count flights tied to any job for this client, excluding the row we
+      // just inserted.
+      const jobIdsForClient = tx
+        .select({ id: jobs.id })
+        .from(jobs)
+        .where(eq(jobs.clientId, jobRow.clientId))
+        .all()
+        .map((r) => r.id);
+      if (jobIdsForClient.length > 0) {
+        priorFlightsWithClient = Math.max(
+          0,
+          tx
+            .select()
+            .from(flights)
+            .where(
+              and(
+                isNotNull(flights.jobId),
+                inArray(flights.jobId, jobIdsForClient),
+              ),
+            )
+            .all().length - 1,
+        );
+      }
+      const repRow = tx
+        .select()
+        .from(reputation)
+        .where(eq(reputation.scope, `client:${jobRow.clientId}`))
+        .get();
+      clientRepScore = repRow?.score ?? 0;
+    }
+
+    const signoffEvent = unscheduledOut
+      ? {
+          severity: unscheduledOut.severity,
+          description: unscheduledOut.description,
+        }
+      : null;
+
+    const promptInput: SignoffPromptInput = {
+      jobType: isFerryJob ? "ferry" : "standard",
+      clientName: isFerryJob
+        ? jobRow.ferryOwnerName ?? null
+        : clientDef?.name ?? null,
+      clientRole: jobRow.role,
+      clientVoice: clientDef?.voice ?? null,
+      ferrySource: isFerryJob ? jobRow.ferrySource ?? null : null,
+      ferryOwnerName: isFerryJob ? jobRow.ferryOwnerName ?? null : null,
+      outcome,
+      divertedFromIcao: isDiversion ? jobRow.destinationIcao : null,
+      actualDestinationIcao: actualDest,
+      unscheduledEvent: signoffEvent,
+      reputationTier: tierForSignoff(priorFlightsWithClient, clientRepScore),
+      flightsWithThisClient: priorFlightsWithClient,
+      originIcao: jobRow.originIcao,
+      blockTimeMinutes: input.blockTimeMinutes,
+      payCents: summary.finalPay,
+    };
+
+    // Byline parts the UI renders under the message.
+    let dispatcherName: string | null = null;
+    let sourceLabel: string | null = null;
+    if (isFerryJob && jobRow.ferrySource && jobRow.ferryOwnerName) {
+      const profile = FERRY_VOICE_PROFILES[jobRow.ferrySource];
+      dispatcherName = profile.dispatcherTemplate.replace(
+        "{ownerName}",
+        jobRow.ferryOwnerName,
+      );
+      // Owner is the dispatcher; dealers/operators have a company name worth
+      // showing on a second line.
+      sourceLabel =
+        jobRow.ferrySource === "owner" ? null : jobRow.ferryOwnerName;
+    } else if (jobRow.clientId && clientDef) {
+      dispatcherName = clientDef.voice?.dispatcherName ?? null;
+      sourceLabel = clientDef.name;
+    } else if (!jobRow.clientId) {
+      // Open market — byline is intentionally minimal.
+      dispatcherName = "Anonymous broker";
+      sourceLabel = null;
+    }
+
     const finalSummary: CompletionSummaryPayload = {
       ...summary,
+      flightId,
       inspectionAlerts: inspectionLines,
       cashAppliedNow,
       unscheduledEvent: unscheduledOut,
+      dispatcherSignoff: null,
       route: {
         originIcao: jobOriginRow.icao,
         originName: jobOriginRow.name,
@@ -489,8 +625,57 @@ export function completeFlightAction(
       },
     };
 
-    return { ok: true, summary: finalSummary };
+    return {
+      ok: true,
+      summary: finalSummary,
+      signoff: {
+        flightId,
+        promptInput,
+        dispatcherName,
+        sourceLabel,
+      },
+    };
   });
+}
+
+/**
+ * Generates the dispatcher sign-off via the AI service, persists it to the
+ * flight row, and returns the payload to merge into the response. Returns
+ * null on any failure (no API key, API error, invalid output) — the caller
+ * should treat null as "no sign-off this time, omit the section".
+ */
+export async function applyDispatcherSignoff(
+  ctx: PostCompletionSignoffContext,
+  generate: (input: SignoffPromptInput) => Promise<string | null>,
+): Promise<DispatcherSignoffPayload | null> {
+  let message: string | null;
+  try {
+    message = await generate(ctx.promptInput);
+  } catch (err) {
+    console.warn("[signoff] generator threw:", err);
+    return null;
+  }
+  if (!message) return null;
+
+  try {
+    db.update(flights)
+      .set({ dispatcherSignoff: message })
+      .where(eq(flights.id, ctx.flightId))
+      .run();
+  } catch (err) {
+    console.warn(
+      `[signoff] persist failed for flight ${ctx.flightId}:`,
+      err,
+    );
+    // Still return the payload — the player sees it even if the cache write
+    // dropped it from the logbook.
+  }
+
+  return {
+    message,
+    dispatcherName: ctx.dispatcherName,
+    sourceLabel: ctx.sourceLabel,
+  };
 }
 
 export function abortFlight(): LifecycleResult {

@@ -38,10 +38,18 @@ export interface CompletionUnscheduledEvent {
   scheduledCompletionAt: number | null;
 }
 
+export interface CompletionDispatcherSignoff {
+  message: string;
+  dispatcherName: string | null;
+  sourceLabel: string | null;
+}
+
 export interface CompletionSummaryData extends CompleteFlightOutput {
+  flightId: number;
   inspectionAlerts: string[];
   cashAppliedNow: number;
   unscheduledEvent: CompletionUnscheduledEvent | null;
+  dispatcherSignoff: CompletionDispatcherSignoff | null;
   route: CompletionSummaryRoute;
 }
 
@@ -351,6 +359,10 @@ export function CompletionSummary({
             />
           </div>
 
+          {summary.dispatcherSignoff && (
+            <DispatcherSignoffCard signoff={summary.dispatcherSignoff} />
+          )}
+
           {summary.unscheduledEvent && (
             <UnscheduledEventCard event={summary.unscheduledEvent} />
           )}
@@ -535,6 +547,34 @@ export function CompletionSummary({
       </div>
     </div>
   );
+}
+
+function DispatcherSignoffCard({
+  signoff,
+}: {
+  signoff: CompletionDispatcherSignoff;
+}) {
+  const byline = formatSignoffByline(signoff);
+  return (
+    <div className="rounded-sm border-l-2 border-amber-deep/70 bg-ink-750 px-5 py-4">
+      <div className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+        Dispatcher sign-off
+      </div>
+      <p className="mt-2 font-display text-[15px] italic leading-relaxed text-text-high">
+        &ldquo;{signoff.message}&rdquo;
+      </p>
+      {byline && (
+        <div className="mt-2 font-mono text-tiny text-muted">— {byline}</div>
+      )}
+    </div>
+  );
+}
+
+function formatSignoffByline(signoff: CompletionDispatcherSignoff): string | null {
+  if (signoff.dispatcherName && signoff.sourceLabel) {
+    return `${signoff.dispatcherName}, ${signoff.sourceLabel}`;
+  }
+  return signoff.dispatcherName ?? signoff.sourceLabel ?? null;
 }
 
 function UnscheduledEventCard({
