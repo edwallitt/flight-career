@@ -27,6 +27,7 @@ import {
 } from "./services/maintenance.js";
 import { refreshMarketplace } from "./services/marketplace.js";
 import { processLoanPayments } from "./services/purchase.js";
+import { simBridge } from "./services/simBridge.js";
 import { appRouter } from "./trpc/router.js";
 
 const app = new Hono();
@@ -40,6 +41,14 @@ const port = 4000;
 console.log(`FlightCareer server listening on http://localhost:${port}`);
 
 serve({ fetch: app.fetch, port });
+
+// Boot the SimBridge connection. Wrapped — connection failures must not take
+// down the server. The service handles its own retry loop internally.
+try {
+  simBridge.start();
+} catch (err) {
+  console.warn("[simBridge] start failed:", err);
+}
 
 const TICK_INTERVAL_MS = 30_000;
 let tickCount = 0;

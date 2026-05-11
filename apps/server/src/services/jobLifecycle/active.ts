@@ -51,6 +51,7 @@ export interface ActiveJobFerryInfo {
 
 export interface ActiveJobSnapshot {
   state: "accepted" | "briefed" | "in_progress";
+  trackingMode: "manual" | "tracked" | null;
   job: {
     id: number;
     clientId: string | null;
@@ -235,6 +236,7 @@ export function getActiveJob(): ActiveJobSnapshot | null {
 
   return {
     state: careerRow.activeFlightState,
+    trackingMode: careerRow.trackingMode,
     job: {
       id: jobRow.id,
       clientId: jobRow.clientId,

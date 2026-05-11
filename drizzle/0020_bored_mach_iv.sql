@@ -1,0 +1,1 @@
+ALTER TABLE `tracking_state` ADD `fuel_at_engine_stop_gal` real;

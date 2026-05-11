@@ -12,6 +12,7 @@ import { Hangar } from "./sections/hangar/Hangar.js";
 import { JobBoard } from "./sections/jobs/JobBoard.js";
 import { Logbook } from "./sections/logbook/Logbook.js";
 import { Marketplace } from "./sections/marketplace/Marketplace.js";
+import { Settings } from "./sections/settings/Settings.js";
 import { TravelPanel } from "./sections/travel/TravelPanel.js";
 
 type ActiveOverlay = "current" | "brief" | "travel" | null;
@@ -57,6 +58,7 @@ export default function App() {
             <Route path="/career" element={<Career />} />
             <Route path="/logbook" element={<Logbook />} />
             <Route path="/map" element={<Atlas />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>
       </div>

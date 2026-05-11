@@ -66,6 +66,18 @@ export interface FlightLogRow {
     dispatcherName: string | null;
     sourceLabel: string | null;
   } | null;
+  // MSFS tracking metadata. tracking.mode is 'manual' for legacy and untracked
+  // flights; everything below is null then. For tracked flights, these are the
+  // raw sim-derived values stored alongside the player-confirmed canonical
+  // values — useful for retrospective comparison.
+  tracking: {
+    mode: "manual" | "tracked";
+    simBlockTimeMinutes: number | null;
+    simFuelBurnedGal: number | null;
+    simActualDestinationIcao: string | null;
+    simEngineStartAt: number | null;
+    simEngineStopAt: number | null;
+  };
 }
 
 export interface FlightFilters {
@@ -265,6 +277,14 @@ export function getFlights(filters: FlightFilters = {}): FlightsResult {
       jobType: job?.jobType ?? "standard",
       isDiversion,
       dispatcherSignoff,
+      tracking: {
+        mode: f.trackingMode,
+        simBlockTimeMinutes: f.simBlockTimeMinutes,
+        simFuelBurnedGal: f.simFuelBurnedGal,
+        simActualDestinationIcao: f.simActualDestinationIcao,
+        simEngineStartAt: f.simEngineStartAt,
+        simEngineStopAt: f.simEngineStopAt,
+      },
     };
   });
 

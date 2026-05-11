@@ -304,6 +304,10 @@ export function FlightDrawer({
                 </p>
               </div>
             )}
+
+            {flight.tracking?.mode === "tracked" && (
+              <TrackingSection flight={flight} />
+            )}
           </>
         )}
       </div>
@@ -405,5 +409,75 @@ function LedgerLine({
       />
       <span className={`tabular-nums ${toneClass}`}>{value}</span>
     </li>
+  );
+}
+
+interface TrackingFlight {
+  blockTimeMinutes: number;
+  fuelBurnedGal: number;
+  destinationIcao: string;
+  tracking: {
+    mode: "manual" | "tracked";
+    simBlockTimeMinutes: number | null;
+    simFuelBurnedGal: number | null;
+    simActualDestinationIcao: string | null;
+    simEngineStartAt: number | null;
+    simEngineStopAt: number | null;
+  };
+}
+
+function TrackingSection({ flight }: { flight: TrackingFlight }) {
+  const t = flight.tracking;
+  const simBlock =
+    t.simBlockTimeMinutes != null
+      ? formatBlock(Math.round(t.simBlockTimeMinutes))
+      : "—";
+  const simFuel =
+    t.simFuelBurnedGal != null ? `${t.simFuelBurnedGal.toFixed(1)} gal` : "—";
+  const blockMatchesSim =
+    t.simBlockTimeMinutes != null &&
+    Math.abs(flight.blockTimeMinutes - t.simBlockTimeMinutes) < 0.5;
+  const fuelMatchesSim =
+    t.simFuelBurnedGal != null &&
+    Math.abs(flight.fuelBurnedGal - t.simFuelBurnedGal) < 0.05;
+  const destMatchesSim =
+    t.simActualDestinationIcao != null &&
+    flight.destinationIcao === t.simActualDestinationIcao;
+
+  return (
+    <div className="rounded-sm border border-ink-600 bg-ink-750 px-3 py-2">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+          Tracking · MSFS
+        </span>
+        <span className="h-px flex-1 bg-ink-600" />
+      </div>
+      <ul className="mt-2 space-y-1 font-mono text-tiny text-text">
+        <li className="flex justify-between">
+          <span className="text-muted">Sim block time</span>
+          <span className="tabular-nums">{simBlock}</span>
+        </li>
+        <li className="flex justify-between">
+          <span className="text-muted">Sim fuel burn</span>
+          <span className="tabular-nums">{simFuel}</span>
+        </li>
+        {t.simActualDestinationIcao && (
+          <li className="flex justify-between">
+            <span className="text-muted">Sim destination</span>
+            <span className="tabular-nums">{t.simActualDestinationIcao}</span>
+          </li>
+        )}
+      </ul>
+      <div className="mt-2 border-t border-ink-600 pt-2 font-mono text-[10px] text-muted">
+        Logged: block {formatBlock(flight.blockTimeMinutes)}
+        {", "}
+        fuel {flight.fuelBurnedGal.toFixed(1)} gal
+        {blockMatchesSim && fuelMatchesSim && destMatchesSim ? (
+          <span className="ml-1 text-amber-glow">(matches sim)</span>
+        ) : (
+          <span className="ml-1 text-amber-warm">(player-edited)</span>
+        )}
+      </div>
+    </div>
   );
 }

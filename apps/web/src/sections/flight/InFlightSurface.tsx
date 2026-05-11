@@ -92,6 +92,27 @@ export function InFlightSurface() {
 
   const data = active.data;
   const isInFlight = data?.state === "in_progress";
+  const isTracked = data?.trackingMode === "tracked";
+
+  // Tracked mode polls the bridge state at 1Hz for the in-flight panel; only
+  // active when the surface is open and tracking. The preview query (auto-fill
+  // values) is hit from the completion modal, so there's no need to poll it
+  // continuously here.
+  const bridgeState = trpc.simBridge.currentState.useQuery(undefined, {
+    enabled: isTracked && isInFlight,
+    refetchInterval: 1_000,
+  });
+  const bridgeStatus = trpc.simBridge.status.useQuery(undefined, {
+    enabled: isTracked && isInFlight,
+    refetchInterval: 2_000,
+  });
+  const trackedPreview = trpc.lifecycle.trackedCompletionPreview.useQuery(
+    undefined,
+    {
+      enabled: isTracked && isInFlight,
+      refetchInterval: 2_000,
+    },
+  );
 
   // Initialize wall start when in_progress for a new job. Reset widget mode
   // to expanded so the next flight surfaces by default.
@@ -132,6 +153,13 @@ export function InFlightSurface() {
         void utils.aircraft.candidatesForJob.invalidate();
         setOverlay(null);
       }
+    },
+  });
+
+  const switchToManualMutation = trpc.lifecycle.switchToManual.useMutation({
+    onSuccess: () => {
+      void utils.lifecycle.getActiveJob.invalidate();
+      void utils.lifecycle.trackedCompletionPreview.invalidate();
     },
   });
 
@@ -281,13 +309,37 @@ export function InFlightSurface() {
                 {formatElapsed(elapsedMs)}
               </span>
             </div>
-            <div className="mt-3 flex items-center justify-between text-tiny">
-              <span className="label">Sim link</span>
-              <span className="text-muted">
-                MSFS · <span className="text-muted-dim">manual mode</span>
-              </span>
-            </div>
+            {isTracked ? (
+              <TrackedFlightDetails
+                state={bridgeState.data ?? null}
+                status={bridgeStatus.data ?? null}
+                preview={trackedPreview.data ?? null}
+              />
+            ) : (
+              <div className="mt-3 flex items-center justify-between text-tiny">
+                <span className="label">Sim link</span>
+                <span className="text-muted">
+                  MSFS · <span className="text-muted-dim">manual mode</span>
+                </span>
+              </div>
+            )}
           </div>
+
+          {/* Tracked-flight escape hatch — demote to manual without losing
+              the in-progress state. Useful when MSFS crashed mid-flight or
+              the player wants to log the flight by hand. */}
+          {isTracked && (
+            <button
+              type="button"
+              onClick={() => switchToManualMutation.mutate()}
+              disabled={switchToManualMutation.isPending}
+              className="w-full border-t border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[10px] uppercase tracking-callsign text-muted hover:bg-ink-800 hover:text-amber-glow disabled:opacity-40"
+            >
+              {switchToManualMutation.isPending
+                ? "Switching…"
+                : "Switch to manual mode"}
+            </button>
+          )}
 
           {/* Actions */}
           <div className="flex items-stretch border-t border-ink-700">
@@ -304,13 +356,18 @@ export function InFlightSurface() {
               onClick={() => setOverlay("completing")}
               className="flex-[1.4] bg-amber-glow/[0.10] px-3 py-2.5 font-mono text-[11px] uppercase tracking-callsign text-amber-warm hover:bg-amber-glow/[0.18]"
             >
-              Complete manually ▸
+              {isTracked &&
+              trackedPreview.data?.hasTrackingData &&
+              trackedPreview.data?.engineStopAt != null
+                ? "Complete flight ▸"
+                : "Complete manually ▸"}
             </button>
           </div>
         </div>
       )}
 
-      {/* Manual completion modal */}
+      {/* Manual completion modal — also used for tracked flights, with values
+          pre-filled from sim data. */}
       {overlay === "completing" && data && (
         <ManualCompletionModal
           job={{
@@ -325,6 +382,7 @@ export function InFlightSurface() {
             fuelBurnGph: a.fuelBurnGph,
           }}
           elapsedMs={elapsedMs}
+          tracked={isTracked ? trackedPreview.data ?? null : null}
           isPending={completeMutation.isPending}
           errorMessage={
             completeMutation.data && !completeMutation.data.ok
@@ -405,4 +463,172 @@ export function InFlightSurface() {
       )}
     </>
   );
+}
+
+// -----------------------------------------------------------------------------
+// Sub-components for the tracked variant of the in-flight widget
+// -----------------------------------------------------------------------------
+
+// Shape mirrors getTrackedCompletionPreview on the server. Inferring through
+// react-query unwraps to {} when the query is disabled, so we declare it
+// explicitly.
+type DestinationResolutionStatus =
+  | "not_landed_yet"
+  | "matched"
+  | "diverted"
+  | "unresolved";
+
+interface TrackedPreview {
+  available: boolean;
+  hasTrackingData: boolean;
+  blockTimeMinutes: number | null;
+  fuelBurnedGal: number | null;
+  resolvedDestinationIcao: string | null;
+  resolvedDestinationDistanceNm: number | null;
+  destinationResolution: DestinationResolutionStatus;
+  isDiversion: boolean;
+  events: Array<{ event: string; timestamp: number }>;
+  engineStartAt: number | null;
+  engineStopAt: number | null;
+  liftedOffAt: number | null;
+  touchedDownAt: number | null;
+}
+
+interface AircraftSnap {
+  positionLat: number;
+  positionLon: number;
+  altitudeFt: number;
+  groundSpeedKts: number;
+  trueHeadingDeg: number;
+  onGround: boolean;
+  engineRunning: boolean;
+  fuelTotalGal: number;
+  simulationRate: number;
+  title: string;
+  timestamp: number;
+}
+
+interface BridgeStatusData {
+  enabled: boolean;
+  bridgeConnection: "connected" | "disconnected" | "connecting";
+  simConnection: "connected" | "disconnected" | "reconnecting" | "unknown";
+  simVersion: string | null;
+  lastUpdate: number | null;
+  isTracking: boolean;
+  trackedJobId: number | null;
+}
+
+// Live data is considered stale if we haven't seen a fresh aircraft.state
+// frame inside this window. Bridge publishes at ~1Hz; 5s is comfortably
+// outside ordinary jitter and well under any user-visible delay.
+const STATE_STALE_MS = 5_000;
+
+function TrackedFlightDetails({
+  state,
+  status,
+  preview,
+}: {
+  state: AircraftSnap | null;
+  status: BridgeStatusData | null;
+  preview: TrackedPreview | null;
+}) {
+  const phase = derivePhase(state, preview);
+  const bridgeOnline =
+    status?.bridgeConnection === "connected" &&
+    status?.simConnection === "connected";
+  // The bridge can be connected but the last frame can still be old (e.g.,
+  // network blip mid-flight). Belt-and-braces freshness check on the
+  // timestamp the server stamped on the snapshot.
+  const stateIsFresh =
+    state != null && Date.now() - state.timestamp < STATE_STALE_MS;
+  const showLiveTelemetry = bridgeOnline && stateIsFresh;
+
+  return (
+    <>
+      <div className="mt-3 flex items-center justify-between text-tiny">
+        <span className="label">Sim link</span>
+        <span
+          className={[
+            "font-mono",
+            bridgeOnline ? "text-amber-glow" : "text-urgency-urgent",
+          ].join(" ")}
+        >
+          {bridgeOnline ? "MSFS · tracked" : "Disconnected"}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center justify-between text-tiny">
+        <span className="label">Phase</span>
+        <span className="text-text">{phase}</span>
+      </div>
+      {showLiveTelemetry && state ? (
+        <>
+          <div className="mt-2 flex items-center justify-between text-tiny">
+            <span className="label">Position</span>
+            <span className="text-text tabular-nums">
+              {state.positionLat.toFixed(2)}°, {state.positionLon.toFixed(2)}°
+            </span>
+          </div>
+          <div className="mt-2 flex items-center justify-between text-tiny">
+            <span className="label">Alt / GS</span>
+            <span className="text-text tabular-nums">
+              {Math.round(state.altitudeFt).toLocaleString()} ft ·{" "}
+              {Math.round(state.groundSpeedKts)} kts
+            </span>
+          </div>
+        </>
+      ) : bridgeOnline ? (
+        <div className="mt-2 font-mono text-tiny text-muted-dim">
+          Awaiting fresh telemetry…
+        </div>
+      ) : null}
+      {preview?.engineStopAt != null && (
+        <div className="mt-3 rounded-sm border border-amber-glow/60 bg-amber-glow/[0.10] p-2">
+          <div className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+            ✓ Ready to log
+          </div>
+          {preview.blockTimeMinutes != null && (
+            <div className="mt-1 font-mono text-tiny text-text">
+              Block time {preview.blockTimeMinutes} min
+              {preview.destinationResolution === "matched" && preview.resolvedDestinationIcao && (
+                <> · arrived {preview.resolvedDestinationIcao}</>
+              )}
+              {preview.destinationResolution === "diverted" && preview.resolvedDestinationIcao && (
+                <>
+                  {" · "}
+                  <span className="text-urgency-urgent">
+                    diverted to {preview.resolvedDestinationIcao}
+                  </span>
+                </>
+              )}
+              {preview.destinationResolution === "unresolved" && (
+                <>
+                  {" · "}
+                  <span className="text-urgency-urgent">
+                    destination not auto-resolved
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {!bridgeOnline && (
+        <div className="mt-3 rounded-sm border border-urgency-urgent/60 bg-urgency-urgent/[0.08] p-2 font-mono text-tiny text-urgency-urgent">
+          MSFS connection lost. You can complete this flight manually.
+        </div>
+      )}
+    </>
+  );
+}
+
+function derivePhase(
+  state: AircraftSnap | null,
+  preview: TrackedPreview | null,
+): string {
+  if (preview?.engineStopAt != null) return "Landed — ready to complete";
+  if (!state) return "Awaiting sim data…";
+  if (!state.engineRunning && state.onGround) return "Pre-flight";
+  if (state.engineRunning && state.onGround) return "On ground · engine running";
+  if (state.engineRunning && !state.onGround) return "Airborne";
+  return "Engine off · airborne";
 }

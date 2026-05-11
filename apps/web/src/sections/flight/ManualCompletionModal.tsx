@@ -20,6 +20,22 @@ interface SubmitInput {
   fuelBurnedGal?: number;
 }
 
+export type DestinationResolutionStatus =
+  | "not_landed_yet"
+  | "matched"
+  | "diverted"
+  | "unresolved";
+
+export interface TrackedPrefill {
+  available: boolean;
+  hasTrackingData: boolean;
+  blockTimeMinutes: number | null;
+  fuelBurnedGal: number | null;
+  resolvedDestinationIcao: string | null;
+  destinationResolution: DestinationResolutionStatus;
+  isDiversion: boolean;
+}
+
 function useEscape(onClose: () => void): void {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -34,6 +50,7 @@ export function ManualCompletionModal({
   job,
   aircraft,
   elapsedMs,
+  tracked,
   isPending,
   errorMessage,
   onClose,
@@ -42,6 +59,7 @@ export function ManualCompletionModal({
   job: JobLite;
   aircraft: AircraftLite;
   elapsedMs: number;
+  tracked?: TrackedPrefill | null;
   isPending: boolean;
   errorMessage: string | null;
   onClose: () => void;
@@ -54,27 +72,65 @@ export function ManualCompletionModal({
     staleTime: Infinity,
   });
 
-  // Default block time: prefer wall-clock elapsed if non-trivial, else
-  // estimated block time from distance/speed. For show; user can override.
+  // Sim data is "useful" when at least one tracked event was recorded. A
+  // tracked flight whose bridge dropped before engine_started has
+  // available=true but hasTrackingData=false; we render that the same as an
+  // untracked flight (no MSFS copy, no auto-fill).
+  const simUsable = tracked?.available === true && tracked.hasTrackingData;
+  const destinationUnresolved =
+    simUsable && tracked.destinationResolution === "unresolved";
+
+  // Default block time: prefer sim-derived (when sim was actually tracking),
+  // then wall-clock elapsed if non-trivial, else estimated from distance.
   const estimatedBlockMin = Math.max(
     1,
     Math.round((job.distanceNm / aircraft.cruiseSpeedKts) * 60),
   );
   const elapsedMin = Math.max(1, Math.round(elapsedMs / 60_000));
-  const defaultBlockMin = elapsedMs > 60_000 ? elapsedMin : estimatedBlockMin;
+  const trackedBlock = simUsable ? tracked.blockTimeMinutes : null;
+  const defaultBlockMin =
+    trackedBlock != null
+      ? trackedBlock
+      : elapsedMs > 60_000
+        ? elapsedMin
+        : estimatedBlockMin;
+  // For destination: matched/diverted → use resolved ICAO. Unresolved →
+  // leave the field empty so the player explicitly types what really
+  // happened (vs. silently accepting the planned destination). Not landed
+  // yet or no tracking data → planned destination as a reasonable seed.
+  const defaultDest = destinationUnresolved
+    ? ""
+    : simUsable && tracked.resolvedDestinationIcao
+      ? tracked.resolvedDestinationIcao
+      : job.destinationIcao;
+  const trackedFuel = simUsable ? tracked.fuelBurnedGal : null;
+  const defaultFuelStr = trackedFuel != null ? String(trackedFuel) : "";
 
-  const [destInput, setDestInput] = useState(job.destinationIcao);
+  const [destInput, setDestInput] = useState(defaultDest);
   const [blockMin, setBlockMin] = useState<string>(String(defaultBlockMin));
-  const [fuelInput, setFuelInput] = useState<string>("");
+  const [fuelInput, setFuelInput] = useState<string>(defaultFuelStr);
   const seededRef = useRef(false);
 
   // Re-seed defaults if job changes (different ICAO).
   useEffect(() => {
     if (!seededRef.current) {
-      setDestInput(job.destinationIcao);
+      setDestInput(defaultDest);
       seededRef.current = true;
     }
-  }, [job.destinationIcao]);
+  }, [defaultDest]);
+
+  // editedFromAuto is reactive — compare current values to the initial seed
+  // so a player who edits, then edits back, sees the indicator clear.
+  const initialAutoValuesRef = useRef({
+    dest: defaultDest,
+    block: String(defaultBlockMin),
+    fuel: defaultFuelStr,
+  });
+  const editedFromAuto =
+    simUsable &&
+    (destInput !== initialAutoValuesRef.current.dest ||
+      blockMin !== initialAutoValuesRef.current.block ||
+      fuelInput !== initialAutoValuesRef.current.fuel);
 
   const blockMinutes = Number(blockMin);
   const blockValid = Number.isFinite(blockMinutes) && blockMinutes > 0;
@@ -119,14 +175,30 @@ export function ManualCompletionModal({
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2 font-mono text-micro uppercase tracking-callsign text-amber-glow">
               <span className="h-1.5 w-1.5 rounded-full bg-amber-glow shadow-[0_0_6px_rgba(212,165,116,0.6)]" />
-              Manual completion · #{String(job.id).padStart(5, "0")}
+              {simUsable ? "Tracked completion" : "Manual completion"}
+              {" · "}#{String(job.id).padStart(5, "0")}
             </div>
             <div className="font-display text-xl font-semibold tracking-tight text-text-high">
               Log the flight
             </div>
             <div className="font-mono text-tiny text-muted-dim">
-              MSFS isn't connected — enter what actually happened.
+              {simUsable
+                ? editedFromAuto
+                  ? "Edited from MSFS auto-fill — your values will be logged."
+                  : "Auto-filled from MSFS. Edit any field before submitting."
+                : "MSFS isn't connected — enter what actually happened."}
             </div>
+            {simUsable && tracked.isDiversion && tracked.resolvedDestinationIcao && (
+              <div className="mt-1 rounded-sm border border-urgency-urgent/60 bg-urgency-urgent/[0.08] px-2 py-1 font-mono text-tiny text-urgency-urgent">
+                ⚠ Diversion detected — landed at {tracked.resolvedDestinationIcao} (planned {job.destinationIcao}).
+              </div>
+            )}
+            {destinationUnresolved && (
+              <div className="mt-1 rounded-sm border border-urgency-urgent/60 bg-urgency-urgent/[0.08] px-2 py-1 font-mono text-tiny text-urgency-urgent">
+                ⚠ Couldn't auto-detect destination — touchdown was {">"}5nm from
+                any known airport. Please enter the ICAO manually.
+              </div>
+            )}
           </div>
           <button
             type="button"

@@ -18,6 +18,8 @@ import {
   ratingExams,
   rentalFleet,
   reputation,
+  settings,
+  trackingState,
   transfers,
 } from "../../db/schema.js";
 import { aircraftSeed } from "../../db/seed-data/aircraft.js";
@@ -49,6 +51,8 @@ export function resetTestDb(opts: ResetOptions = {}): void {
   // delete order that doesn't exist.
   db.run(sql`PRAGMA foreign_keys = OFF`);
   try {
+    db.delete(trackingState).run();
+    db.delete(settings).run();
     db.delete(flights).run();
     db.delete(maintenanceEvents).run();
     db.delete(transfers).run();

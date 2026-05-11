@@ -11,6 +11,7 @@ import { logbookRouter } from "./routers/logbook.js";
 import { maintenanceRouter } from "./routers/maintenance.js";
 import { marketplaceRouter } from "./routers/marketplace.js";
 import { saleRouter } from "./routers/sale.js";
+import { simBridgeRouter } from "./routers/simBridge.js";
 import { travelRouter } from "./routers/travel.js";
 import { router } from "./trpc.js";
 
@@ -29,6 +30,7 @@ export const appRouter = router({
   maintenance: maintenanceRouter,
   sale: saleRouter,
   fuel: fuelRouter,
+  simBridge: simBridgeRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -91,6 +91,11 @@ export const career = sqliteTable("career", {
   // (sim time stops, jobs don't expire, fuel drift halts, marketplace freezes).
   // The Force-tick mutation still works so dev tooling is unaffected.
   isPaused: integer("is_paused", { mode: "boolean" }).notNull().default(false),
+  // Per-flight tracking mode. 'manual' = the existing path (player enters
+  // block time/destination by hand). 'tracked' = the SimBridge feeds events
+  // and the completion form pre-fills from sim-derived values. Cleared on
+  // completion or abort, alongside the other active_* fields.
+  trackingMode: text("tracking_mode", { enum: ["manual", "tracked"] }),
 });
 
 export const ratings = sqliteTable("ratings", {
@@ -284,6 +289,68 @@ export const flights = sqliteTable("flights", {
   // logbook drawer. Null when generation was skipped (no API key) or failed —
   // the UI just omits the section.
   dispatcherSignoff: text("dispatcher_signoff"),
+  // MSFS tracking metadata. trackingMode is canonical ('manual' for legacy
+  // rows). sim_* columns are reference values captured from the bridge — they
+  // never override the player-confirmed values in blockTimeMinutes / fuelBurnedGal
+  // / destinationIcao. All sim timestamps are wall-clock unix ms (bridge time);
+  // the actual flight startedAt/endedAt above remain sim-time, like manual flights.
+  trackingMode: text("tracking_mode", { enum: ["manual", "tracked"] })
+    .notNull()
+    .default("manual"),
+  simBlockTimeMinutes: real("sim_block_time_minutes"),
+  simEngineStartAt: integer("sim_engine_start_at"),
+  simEngineStopAt: integer("sim_engine_stop_at"),
+  simLiftedOffAt: integer("sim_lifted_off_at"),
+  simTouchedDownAt: integer("sim_touched_down_at"),
+  simActualDestinationIcao: text("sim_actual_destination_icao"),
+  simFuelBurnedGal: real("sim_fuel_burned_gal"),
+  simLandingLat: real("sim_landing_lat"),
+  simLandingLon: real("sim_landing_lon"),
+});
+
+// =============================================================================
+// MSFS tracking — settings + per-flight buffered state
+// =============================================================================
+
+// Generic key/value settings. Currently holds msfs_integration_enabled; future
+// runtime toggles can reuse the same table without a migration.
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
+// Buffered state for an in-progress *tracked* flight. The career singleton can
+// only have one active flight at a time, so this table holds at most one row.
+// Keyed by the active jobs.id so a stale row from a prior flight is trivially
+// distinguishable. Cleared on completion or abort.
+export const trackingState = sqliteTable("tracking_state", {
+  jobId: integer("job_id")
+    .primaryKey()
+    .references(() => jobs.id),
+  currentPositionLat: real("current_position_lat"),
+  currentPositionLon: real("current_position_lon"),
+  currentAltitudeFt: real("current_altitude_ft"),
+  currentGroundSpeedKts: real("current_ground_speed_kts"),
+  currentTrueHeadingDeg: real("current_true_heading_deg"),
+  onGround: integer("on_ground", { mode: "boolean" }),
+  engineRunning: integer("engine_running", { mode: "boolean" }),
+  fuelTotalGal: real("fuel_total_gal"),
+  // JSON array of { event, timestamp } captured from the bridge. The events
+  // are wall-clock unix ms from the bridge, not sim time.
+  eventsReceived: text("events_received").notNull().default("[]"),
+  fuelAtEngineStartGal: real("fuel_at_engine_start_gal"),
+  // Captured on engine_stopped — needed to compute fuel burn cleanly when the
+  // player refuels at the gate before completing (a post-shutdown top-up would
+  // otherwise make `currentFuelGal` rise and break the sim-start − current
+  // delta). Falls back to currentFuelGal at completion time when null.
+  fuelAtEngineStopGal: real("fuel_at_engine_stop_gal"),
+  // Wall-clock unix ms — used only for staleness checks in the UI.
+  lastUpdatedAt: integer("last_updated_at").notNull(),
+  bridgeStatus: text("bridge_status", {
+    enum: ["connected", "disconnected", "reconnecting"],
+  })
+    .notNull()
+    .default("disconnected"),
 });
 
 export const maintenanceEvents = sqliteTable("maintenance_events", {

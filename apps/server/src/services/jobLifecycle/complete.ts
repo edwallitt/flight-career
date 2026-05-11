@@ -25,7 +25,12 @@ import {
   ownedAircraft,
   ratings,
   reputation,
+  trackingState,
 } from "../../db/schema.js";
+import {
+  simBridge,
+  type TrackedFlightEventRecord,
+} from "../simBridge.js";
 import {
   ABORT_REP_PENALTY,
   activeAircraftType,
@@ -57,6 +62,279 @@ export interface CompleteFlightActionInput {
   actualDestinationIcao: string;
   blockTimeMinutes: number;
   fuelBurnedGal?: number;
+}
+
+interface TrackedFlightSnapshot {
+  events: TrackedFlightEventRecord[];
+  fuelAtEngineStartGal: number | null;
+  fuelAtEngineStopGal: number | null;
+  currentFuelGal: number | null;
+  landingLat: number | null;
+  landingLon: number | null;
+}
+
+interface TrackedDerived {
+  blockTimeMinutes: number | null;
+  engineStartAt: number | null;
+  engineStopAt: number | null;
+  liftedOffAt: number | null;
+  touchedDownAt: number | null;
+  fuelBurnedGal: number | null;
+  landingLat: number | null;
+  landingLon: number | null;
+}
+
+// Both `db` and a `db.transaction(tx => ...)` `tx` expose the same query
+// builders we need; drizzle's exact transaction type isn't structurally
+// compatible with the database type. Loose typing here avoids leaking that
+// detail through these helpers.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type DbLike = any;
+function loadTrackedSnapshot(
+  tx: DbLike,
+  jobId: number,
+): TrackedFlightSnapshot | null {
+  const row = tx
+    .select()
+    .from(trackingState)
+    .where(eq(trackingState.jobId, jobId))
+    .get();
+  if (!row) return null;
+  let events: TrackedFlightEventRecord[] = [];
+  try {
+    const parsed = JSON.parse(row.eventsReceived) as unknown;
+    if (Array.isArray(parsed)) events = parsed as TrackedFlightEventRecord[];
+  } catch {
+    events = [];
+  }
+  return {
+    events,
+    fuelAtEngineStartGal: row.fuelAtEngineStartGal,
+    fuelAtEngineStopGal: row.fuelAtEngineStopGal,
+    currentFuelGal: row.fuelTotalGal,
+    landingLat: row.currentPositionLat,
+    landingLon: row.currentPositionLon,
+  };
+}
+
+function deriveFromTracked(snap: TrackedFlightSnapshot): TrackedDerived {
+  let engineStartAt: number | null = null;
+  let engineStopAt: number | null = null;
+  let liftedOffAt: number | null = null;
+  let touchedDownAt: number | null = null;
+  // Latest touchdown wins — covers go-arounds and bounces.
+  let landingLat: number | null = null;
+  let landingLon: number | null = null;
+  for (const evt of snap.events) {
+    switch (evt.event) {
+      case "engine_started":
+        if (engineStartAt == null) engineStartAt = evt.timestamp;
+        break;
+      case "engine_stopped":
+        engineStopAt = evt.timestamp;
+        break;
+      case "lifted_off":
+        if (liftedOffAt == null) liftedOffAt = evt.timestamp;
+        break;
+      case "touched_down":
+        touchedDownAt = evt.timestamp;
+        if (evt.positionLat != null && evt.positionLon != null) {
+          landingLat = evt.positionLat;
+          landingLon = evt.positionLon;
+        }
+        break;
+    }
+  }
+  // Prefer touchdown coords from the event payload; fall back to the last
+  // persisted state if the event didn't carry them.
+  if (landingLat == null) landingLat = snap.landingLat;
+  if (landingLon == null) landingLon = snap.landingLon;
+
+  // Block time = engine_start to engine_stop (wall-clock minutes). Both
+  // domains are wall-clock unix ms, same as the manual modal uses.
+  let blockTimeMinutes: number | null = null;
+  if (engineStartAt != null && engineStopAt != null && engineStopAt > engineStartAt) {
+    blockTimeMinutes = (engineStopAt - engineStartAt) / 60_000;
+  }
+
+  // Fuel burn: prefer the captured engine_stopped reading so a post-shutdown
+  // refuel doesn't break the delta. Fall back to whatever fuel we last saw if
+  // engine_stopped never fired (in-progress flights or a missed event).
+  let fuelBurnedGal: number | null = null;
+  if (snap.fuelAtEngineStartGal != null) {
+    const endFuel =
+      snap.fuelAtEngineStopGal != null
+        ? snap.fuelAtEngineStopGal
+        : snap.currentFuelGal;
+    if (endFuel != null) {
+      const delta = snap.fuelAtEngineStartGal - endFuel;
+      fuelBurnedGal = delta > 0 ? Math.round(delta * 10) / 10 : null;
+    }
+  }
+
+  return {
+    blockTimeMinutes,
+    engineStartAt,
+    engineStopAt,
+    liftedOffAt,
+    touchedDownAt,
+    fuelBurnedGal,
+    landingLat,
+    landingLon,
+  };
+}
+
+const NEAREST_AIRPORT_THRESHOLD_NM = 5;
+
+/**
+ * Resolve a touchdown position to an ICAO. Linear scan over airports — the
+ * table is small enough (a few thousand rows) that this is faster than
+ * building any index. Returns null if nothing is within 5nm.
+ */
+function resolveNearestIcao(
+  tx: DbLike,
+  lat: number,
+  lon: number,
+): { icao: string; distanceNm: number } | null {
+  const all = tx
+    .select({ icao: airports.icao, lat: airports.lat, lon: airports.lon })
+    .from(airports)
+    .all();
+  let best: { icao: string; distanceNm: number } | null = null;
+  for (const a of all) {
+    const d = haversineNm({ lat, lon }, { lat: a.lat, lon: a.lon });
+    if (best == null || d < best.distanceNm) {
+      best = { icao: a.icao, distanceNm: d };
+    }
+  }
+  if (!best) return null;
+  return best.distanceNm <= NEAREST_AIRPORT_THRESHOLD_NM ? best : null;
+}
+
+// Discriminant for what the sim told us about where the player landed. The UI
+// surfaces these as distinct states — "matched"/"diverted" auto-fill the
+// destination, "unresolved" forces the player to enter it, and
+// "not_landed_yet" hides the auto-fill cue entirely.
+export type DestinationResolutionStatus =
+  | "not_landed_yet"
+  | "matched"
+  | "diverted"
+  | "unresolved";
+
+export interface TrackedCompletionPreview {
+  // True iff the player is in a tracked flight RIGHT NOW. Independent of
+  // whether any events have arrived — distinguishes "no flight" from "tracked
+  // flight, bridge quiet so far".
+  available: boolean;
+  // True iff at least one bridge event was recorded for this flight. The UI
+  // uses this to decide whether to label the modal "Tracked completion" or
+  // fall back to "Manual completion" copy (because nothing was actually
+  // tracked).
+  hasTrackingData: boolean;
+  blockTimeMinutes: number | null;
+  fuelBurnedGal: number | null;
+  resolvedDestinationIcao: string | null;
+  resolvedDestinationDistanceNm: number | null;
+  destinationResolution: DestinationResolutionStatus;
+  isDiversion: boolean;
+  events: TrackedFlightEventRecord[];
+  engineStartAt: number | null;
+  engineStopAt: number | null;
+  liftedOffAt: number | null;
+  touchedDownAt: number | null;
+}
+
+/**
+ * Read-only view of what the server would auto-fill for a tracked completion.
+ * The UI uses this to seed the completion form and to decide whether to show
+ * the "auto-detect ready" prompt. Returns `available: false` when the active
+ * flight isn't tracked or the data isn't there yet.
+ */
+export function getTrackedCompletionPreview(): TrackedCompletionPreview {
+  const empty: TrackedCompletionPreview = {
+    available: false,
+    hasTrackingData: false,
+    blockTimeMinutes: null,
+    fuelBurnedGal: null,
+    resolvedDestinationIcao: null,
+    resolvedDestinationDistanceNm: null,
+    destinationResolution: "not_landed_yet",
+    isDiversion: false,
+    events: [],
+    engineStartAt: null,
+    engineStopAt: null,
+    liftedOffAt: null,
+    touchedDownAt: null,
+  };
+  const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
+  if (!careerRow) return empty;
+  if (
+    careerRow.activeFlightState !== "in_progress" ||
+    careerRow.trackingMode !== "tracked" ||
+    careerRow.activeJobId == null
+  ) {
+    return empty;
+  }
+  const jobRow = db
+    .select()
+    .from(jobs)
+    .where(eq(jobs.id, careerRow.activeJobId))
+    .get();
+  if (!jobRow) return empty;
+
+  const snap = loadTrackedSnapshot(db, careerRow.activeJobId);
+  if (!snap) {
+    return { ...empty, available: true };
+  }
+  const derived = deriveFromTracked(snap);
+
+  let resolvedIcao: string | null = null;
+  let resolvedDistance: number | null = null;
+  if (derived.landingLat != null && derived.landingLon != null) {
+    const nearest = resolveNearestIcao(
+      db,
+      derived.landingLat,
+      derived.landingLon,
+    );
+    if (nearest) {
+      resolvedIcao = nearest.icao;
+      resolvedDistance = nearest.distanceNm;
+    }
+  }
+
+  // Touchdown happens before engine_stopped. Once we've seen a touchdown event
+  // we try to resolve a nearby airport; if none is within threshold we surface
+  // an "unresolved" state so the UI can prompt the player to type the ICAO
+  // instead of silently pre-filling the planned destination.
+  let destinationResolution: DestinationResolutionStatus;
+  if (derived.touchedDownAt == null) {
+    destinationResolution = "not_landed_yet";
+  } else if (resolvedIcao == null) {
+    destinationResolution = "unresolved";
+  } else if (resolvedIcao === jobRow.destinationIcao) {
+    destinationResolution = "matched";
+  } else {
+    destinationResolution = "diverted";
+  }
+
+  return {
+    available: true,
+    hasTrackingData: snap.events.length > 0,
+    blockTimeMinutes:
+      derived.blockTimeMinutes != null
+        ? Math.max(1, Math.round(derived.blockTimeMinutes))
+        : null,
+    fuelBurnedGal: derived.fuelBurnedGal,
+    resolvedDestinationIcao: resolvedIcao,
+    resolvedDestinationDistanceNm: resolvedDistance,
+    destinationResolution,
+    isDiversion: destinationResolution === "diverted",
+    events: snap.events,
+    engineStartAt: derived.engineStartAt,
+    engineStopAt: derived.engineStopAt,
+    liftedOffAt: derived.liftedOffAt,
+    touchedDownAt: derived.touchedDownAt,
+  };
 }
 
 export interface PostFlightUnscheduledEvent extends UnscheduledEvent {
@@ -147,7 +425,12 @@ export function completeFlightAction(
     return { ok: false, error: "Destination ICAO is required" };
   }
 
-  return db.transaction((tx): CompleteFlightActionResult => {
+  // Populated by the txn closure when a tracked flight is being cleared. We
+  // call simBridge.endTracking AFTER the txn commits so an unexpected rollback
+  // doesn't desync the in-memory pointer from the DB.
+  let trackedJobIdToFinalize: number | null = null;
+
+  const result = db.transaction((tx): CompleteFlightActionResult => {
     const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
     if (!careerRow) return { ok: false, error: "Career not found" };
     if (careerRow.activeFlightState !== "in_progress") {
@@ -208,6 +491,30 @@ export function completeFlightAction(
           { lat: jobDestRow.lat, lon: jobDestRow.lon },
         )
       : 0;
+
+    // Tracked-flight metadata is captured here even though it doesn't affect
+    // the canonical block-time / fuel-burn used in the completion math —
+    // those come from the player-confirmed input. The sim-derived values are
+    // persisted to the flight row for retrospective inspection (and a future
+    // "use sim values" toggle).
+    const trackingMode: "manual" | "tracked" =
+      careerRow.trackingMode === "tracked" ? "tracked" : "manual";
+    const trackedSnap =
+      trackingMode === "tracked" ? loadTrackedSnapshot(tx, jobRow.id) : null;
+    const trackedDerived = trackedSnap ? deriveFromTracked(trackedSnap) : null;
+    let trackedResolvedIcao: string | null = null;
+    if (
+      trackedDerived &&
+      trackedDerived.landingLat != null &&
+      trackedDerived.landingLon != null
+    ) {
+      const nearest = resolveNearestIcao(
+        tx,
+        trackedDerived.landingLat,
+        trackedDerived.landingLon,
+      );
+      trackedResolvedIcao = nearest?.icao ?? null;
+    }
 
     let ownedAircraftRow: typeof ownedAircraft.$inferSelect | null = null;
     if (
@@ -291,6 +598,7 @@ export function completeFlightAction(
         flightStartedAt: null,
         briefedFuelGallons: null,
         briefedFuelCostCents: null,
+        trackingMode: null,
       })
       .where(eq(career.id, 1))
       .run();
@@ -494,9 +802,32 @@ export function completeFlightAction(
         totalRevenue: summary.flightLogEntry.totalRevenue,
         outcome,
         notes: summary.flightLogEntry.notes,
+        trackingMode,
+        simBlockTimeMinutes: trackedDerived?.blockTimeMinutes ?? null,
+        simEngineStartAt: trackedDerived?.engineStartAt ?? null,
+        simEngineStopAt: trackedDerived?.engineStopAt ?? null,
+        simLiftedOffAt: trackedDerived?.liftedOffAt ?? null,
+        simTouchedDownAt: trackedDerived?.touchedDownAt ?? null,
+        simActualDestinationIcao: trackedResolvedIcao,
+        simFuelBurnedGal: trackedDerived?.fuelBurnedGal ?? null,
+        simLandingLat: trackedDerived?.landingLat ?? null,
+        simLandingLon: trackedDerived?.landingLon ?? null,
       })
       .run();
     const flightId = Number(flightInsert.lastInsertRowid);
+
+    // Clear the buffered tracking row. Best-effort — the foreign key allows
+    // the row to outlive the active job briefly, so a delete failure here is
+    // tolerable.
+    if (trackingMode === "tracked") {
+      try {
+        tx.delete(trackingState).where(eq(trackingState.jobId, jobRow.id)).run();
+      } catch (err) {
+        console.warn("[complete] failed to clear tracking_state:", err);
+      }
+      // Hand off to post-txn — see trackedJobIdToFinalize declaration above.
+      trackedJobIdToFinalize = jobRow.id;
+    }
 
     // Job: mark completed, store rep deltas
     tx.update(jobs)
@@ -636,6 +967,14 @@ export function completeFlightAction(
       },
     };
   });
+
+  // Side-effect: nudge the bridge's in-memory tracked-job pointer now that the
+  // DB commit is durable. endTracking(deleteRow=false) is a sync no-op against
+  // the DB (the row was already deleted in the txn) and only touches memory.
+  if (result.ok && trackedJobIdToFinalize != null) {
+    simBridge.endTracking(trackedJobIdToFinalize, false);
+  }
+  return result;
 }
 
 /**
@@ -679,7 +1018,8 @@ export async function applyDispatcherSignoff(
 }
 
 export function abortFlight(): LifecycleResult {
-  return db.transaction((tx): LifecycleResult => {
+  let trackedJobIdToFinalize: number | null = null;
+  const result = db.transaction((tx): LifecycleResult => {
     const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
     if (!careerRow) return { ok: false, error: "Career not found" };
     if (careerRow.activeFlightState !== "in_progress") {
@@ -722,6 +1062,16 @@ export function abortFlight(): LifecycleResult {
         .run();
     }
 
+    // Clear any buffered tracking state — abort discards it like the flight
+    // never happened. Best-effort; foreign-key lifecycle is stable.
+    if (careerRow.trackingMode === "tracked") {
+      try {
+        tx.delete(trackingState).where(eq(trackingState.jobId, careerRow.activeJobId)).run();
+      } catch (err) {
+        console.warn("[abort] failed to clear tracking_state:", err);
+      }
+    }
+
     tx.update(career)
       .set({
         activeJobId: null,
@@ -732,10 +1082,56 @@ export function abortFlight(): LifecycleResult {
         flightStartedAt: null,
         briefedFuelGallons: null,
         briefedFuelCostCents: null,
+        trackingMode: null,
       })
       .where(eq(career.id, 1))
       .run();
 
+    if (careerRow.trackingMode === "tracked" && careerRow.activeJobId != null) {
+      trackedJobIdToFinalize = careerRow.activeJobId;
+    }
+
     return { ok: true };
   });
+
+  if (result.ok && trackedJobIdToFinalize != null) {
+    simBridge.endTracking(trackedJobIdToFinalize, false);
+  }
+  return result;
+}
+
+/**
+ * Mid-flight escape hatch: demote an active tracked flight to manual mode.
+ * The flight stays in_progress; only the tracking metadata is unwound. Player
+ * completes via the existing manual form. Used by the "Switch to Manual Mode"
+ * button and (transitively) by the MSFS-integration off-toggle.
+ */
+export function switchToManualMode(): LifecycleResult {
+  let trackedJobIdToFinalize: number | null = null;
+  const result = db.transaction((tx): LifecycleResult => {
+    const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
+    if (!careerRow) return { ok: false, error: "Career not found" };
+    if (careerRow.activeFlightState !== "in_progress") {
+      return { ok: false, error: "No flight in progress" };
+    }
+    if (careerRow.trackingMode !== "tracked") {
+      // Already manual — idempotent success rather than error noise.
+      return { ok: true };
+    }
+    tx.update(career)
+      .set({ trackingMode: "manual" })
+      .where(eq(career.id, 1))
+      .run();
+    // The tracking_state row stays — sim_* values captured up to this point
+    // are still useful for completion's reference fields. complete.ts will
+    // GC it.
+    if (careerRow.activeJobId != null) {
+      trackedJobIdToFinalize = careerRow.activeJobId;
+    }
+    return { ok: true };
+  });
+  if (result.ok && trackedJobIdToFinalize != null) {
+    simBridge.endTracking(trackedJobIdToFinalize, false);
+  }
+  return result;
 }

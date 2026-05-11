@@ -410,14 +410,10 @@ export function CurrentJobModal({
               </button>
             )}
             {data.state === "briefed" && (
-              <button
-                type="button"
-                disabled={beginFlightMutation.isPending}
-                onClick={() => beginFlightMutation.mutate()}
-                className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24] disabled:opacity-40"
-              >
-                {beginFlightMutation.isPending ? "Starting…" : "Begin flight ▸"}
-              </button>
+              <BeginFlightActions
+                isPending={beginFlightMutation.isPending}
+                onBegin={(mode) => beginFlightMutation.mutate({ trackingMode: mode })}
+              />
             )}
             {data.state === "in_progress" && (
               <button
@@ -431,6 +427,85 @@ export function CurrentJobModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function BeginFlightActions({
+  isPending,
+  onBegin,
+}: {
+  isPending: boolean;
+  onBegin: (mode: "manual" | "tracked") => void;
+}) {
+  // Status drives which buttons we show. We poll at 3s here — the player will
+  // have just confirmed the brief and may have started MSFS in parallel.
+  const status = trpc.simBridge.status.useQuery(undefined, {
+    refetchInterval: 3_000,
+  });
+  const data = status.data;
+  const enabled = data?.enabled ?? false;
+  const bridgeOk = data?.bridgeConnection === "connected";
+  const simOk = data?.simConnection === "connected";
+
+  if (!enabled) {
+    return (
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={() => onBegin("manual")}
+        className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24] disabled:opacity-40"
+      >
+        {isPending ? "Starting…" : "Begin flight ▸"}
+      </button>
+    );
+  }
+
+  if (enabled && bridgeOk && simOk) {
+    return (
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => onBegin("manual")}
+            className="rounded-sm border border-ink-600 bg-ink-750 px-4 py-2 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-amber-deep hover:text-amber-glow disabled:opacity-40"
+          >
+            Begin flight (manual)
+          </button>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => onBegin("tracked")}
+            className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24] disabled:opacity-40"
+          >
+            {isPending ? "Starting…" : "Begin flight (tracked) ▸"}
+          </button>
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+          Tracked: auto-detect departure, arrival, block time
+        </span>
+      </div>
+    );
+  }
+
+  // enabled but bridge/sim not ready — manual only, with explanatory note.
+  const note = !bridgeOk
+    ? "MSFS bridge offline — open Settings to verify."
+    : "MSFS not detected — start MSFS or use manual mode.";
+  return (
+    <div className="flex flex-col items-end gap-1.5">
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={() => onBegin("manual")}
+        className="rounded-sm border border-amber-glow bg-amber-glow/[0.16] px-5 py-2 font-mono text-[12px] uppercase tracking-callsign text-amber-warm shadow-[0_0_0_1px_rgba(212,165,116,0.45),0_0_22px_-6px_rgba(212,165,116,0.55)] hover:bg-amber-glow/[0.24] disabled:opacity-40"
+      >
+        {isPending ? "Starting…" : "Begin flight (manual) ▸"}
+      </button>
+      <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
+        {note}
+      </span>
     </div>
   );
 }

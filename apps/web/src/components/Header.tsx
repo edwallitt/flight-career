@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { trpc } from "../trpc.js";
 import { formatCash, formatSimDateTime } from "../lib/formatters.js";
 import { ActiveJobPill } from "../sections/active/ActiveJobPill.js";
@@ -75,6 +77,119 @@ function VRule() {
   return <div className="self-stretch w-px bg-ink-600" />;
 }
 
+function MsfsChip() {
+  const navigate = useNavigate();
+  const status = trpc.simBridge.status.useQuery(undefined, {
+    refetchInterval: 5_000,
+  });
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click while open. Listener attaches only when open.
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const data = status.data;
+  if (!data?.enabled) return null;
+
+  const bridgeOk = data.bridgeConnection === "connected";
+  const simOk = data.simConnection === "connected";
+  let label = "OFFLINE";
+  let dotCls = "bg-muted-dim";
+  let textCls = "text-muted-dim";
+  if (bridgeOk && simOk) {
+    label = "CONNECTED";
+    dotCls = "bg-emerald-400 shadow-[0_0_5px_rgba(16,185,129,0.55)]";
+    textCls = "text-emerald-300";
+  } else if (bridgeOk) {
+    label = "WAITING";
+    dotCls = "bg-amber-glow shadow-[0_0_5px_rgba(212,165,116,0.55)]";
+    textCls = "text-amber-glow";
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 rounded-sm border border-ink-600 bg-ink-750 px-2 py-1 font-mono text-[10px] uppercase tracking-callsign hover:border-amber-deep"
+        title="MSFS integration status"
+      >
+        <span className={["h-1.5 w-1.5 rounded-full", dotCls].join(" ")} />
+        <span className="text-muted">MSFS</span>
+        <span className="text-muted-dim">·</span>
+        <span className={textCls}>{label}</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-64 border border-ink-600 bg-ink-800 p-3 shadow-xl">
+          <div className="font-mono text-micro uppercase tracking-callsign text-muted-dim">
+            MSFS integration
+          </div>
+          <div className="mt-2 space-y-1.5 font-mono text-tiny">
+            <div className="flex items-center gap-2">
+              <span
+                className={[
+                  "h-1.5 w-1.5 rounded-full",
+                  bridgeOk
+                    ? "bg-emerald-400"
+                    : data.bridgeConnection === "connecting"
+                      ? "bg-amber-warm"
+                      : "bg-muted-dim",
+                ].join(" ")}
+              />
+              <span className="text-muted">Bridge</span>
+              <span className="ml-auto text-text">
+                {bridgeOk ? "Connected" : data.bridgeConnection === "connecting" ? "Connecting" : "Offline"}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className={[
+                  "h-1.5 w-1.5 rounded-full",
+                  simOk
+                    ? "bg-emerald-400"
+                    : data.simConnection === "reconnecting"
+                      ? "bg-amber-warm"
+                      : "bg-muted-dim",
+                ].join(" ")}
+              />
+              <span className="text-muted">MSFS</span>
+              <span className="ml-auto text-text">
+                {simOk
+                  ? data.simVersion ?? "Connected"
+                  : data.simConnection === "reconnecting"
+                    ? "Reconnecting"
+                    : "Not detected"}
+              </span>
+            </div>
+            {data.isTracking && (
+              <div className="mt-1 rounded-sm border border-amber-deep/40 bg-amber-glow/[0.06] px-2 py-1 text-amber-glow">
+                Tracking flight #{String(data.trackedJobId ?? 0).padStart(5, "0")}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              navigate("/settings");
+            }}
+            className="mt-3 w-full rounded-sm border border-ink-600 bg-ink-750 px-2 py-1.5 font-mono text-[11px] uppercase tracking-callsign text-muted hover:border-amber-deep hover:text-amber-glow"
+          >
+            Open settings →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CogIcon() {
   return (
     <svg
@@ -101,6 +216,7 @@ export function Header({
   onOpenTravel: () => void;
 }) {
   const utils = trpc.useUtils();
+  const navigate = useNavigate();
   const career = trpc.career.get.useQuery(undefined, {
     refetchInterval: 5_000,
   });
@@ -174,6 +290,7 @@ export function Header({
 
       {/* Right rail: status + pause + settings */}
       <div className="flex items-center gap-4 border-l border-ink-600 px-5">
+        <MsfsChip />
         <div
           className={[
             "flex items-center gap-2 font-mono text-micro uppercase tracking-callsign",
@@ -217,7 +334,7 @@ export function Header({
           type="button"
           className="flex h-8 w-8 items-center justify-center rounded-sm border border-ink-600 bg-ink-750 text-muted hover:border-amber-deep hover:text-amber-glow"
           aria-label="Settings"
-          onClick={() => alert("Settings — coming soon")}
+          onClick={() => navigate("/settings")}
         >
           <CogIcon />
         </button>
