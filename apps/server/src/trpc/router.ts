@@ -5,6 +5,7 @@ import { careerRouter } from "./routers/career.js";
 import { fuelRouter } from "./routers/fuel.js";
 import { hangarRouter } from "./routers/hangar.js";
 import { healthRouter } from "./routers/health.js";
+import { insuranceRouter } from "./routers/insurance.js";
 import { jobsRouter } from "./routers/jobs.js";
 import { lifecycleRouter } from "./routers/lifecycle.js";
 import { logbookRouter } from "./routers/logbook.js";
@@ -28,6 +29,7 @@ export const appRouter = router({
   logbook: logbookRouter,
   atlas: atlasRouter,
   maintenance: maintenanceRouter,
+  insurance: insuranceRouter,
   sale: saleRouter,
   fuel: fuelRouter,
   simBridge: simBridgeRouter,

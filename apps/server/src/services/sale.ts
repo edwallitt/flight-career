@@ -10,6 +10,7 @@ import {
   aircraftTypes,
   airports,
   career,
+  insurancePolicies,
   loans,
   ownedAircraft,
 } from "../db/schema.js";
@@ -212,6 +213,20 @@ export function executeSale(input: {
         salePriceCents: estimate.grossSaleCents,
       })
       .where(eq(ownedAircraft.id, owned.id))
+      .run();
+
+    // Cancel any active insurance policy — otherwise processInsurancePremiums
+    // (which filters only on status='active') would keep charging premiums in
+    // perpetuity against an aircraft the player no longer owns. No refund of
+    // the current month, consistent with manual cancellation.
+    tx.update(insurancePolicies)
+      .set({ status: "cancelled" })
+      .where(
+        and(
+          eq(insurancePolicies.ownedAircraftId, owned.id),
+          eq(insurancePolicies.status, "active"),
+        ),
+      )
       .run();
 
     return {

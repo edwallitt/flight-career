@@ -25,6 +25,7 @@ import {
   processMaintenanceCompletions,
   processMonthlyOwnership,
 } from "./services/maintenance.js";
+import { processInsurancePremiums } from "./services/insurance.js";
 import { refreshMarketplace } from "./services/marketplace.js";
 import { processLoanPayments } from "./services/purchase.js";
 import { simBridge } from "./services/simBridge.js";
@@ -113,6 +114,17 @@ setInterval(() => {
     }
   } catch (err) {
     console.error("[ownership] failed:", err);
+  }
+
+  try {
+    const ins = processInsurancePremiums();
+    if (ins.charged > 0) {
+      console.log(
+        `[insurance] ${ins.charged} premium(s), -$${(ins.totalCents / 100).toLocaleString()}`,
+      );
+    }
+  } catch (err) {
+    console.error("[insurance] failed:", err);
   }
 
   tickCount++;

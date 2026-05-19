@@ -76,7 +76,7 @@ function rentalTypesFor(
 }
 
 // Inserts a guaranteed first-flight job: Maritime Cargo Express CYHZ → CYAW.
-// 14 nm short hop, light parcel cargo, well within a C152's range and payload.
+// 14 nm short hop, light parcel cargo, well within a C172's range and payload.
 // Uses the shared pay calculator with the same multipliers as the standard
 // MCE short-hop template so the math stays consistent.
 function seedFirstFlightJob(simNow: number): void {
@@ -158,7 +158,7 @@ async function seed() {
   db.insert(reputation).values(reputationRows).onConflictDoNothing().run();
 
   // Career singleton — only seed if id=1 doesn't exist. New player gets a
-  // small inheritance: $60k cash and grandfather's C152, both narrated in the
+  // small inheritance: $60k cash and grandfather's C172, both narrated in the
   // first-run welcome modal on the web side.
   const STARTER_HOME_ICAO = "CYHZ";
   const existing = db.select().from(career).where(eq(career.id, 1)).get();
@@ -175,23 +175,23 @@ async function seed() {
       })
       .run();
 
-    // Grandfather's C152 — well-flown, recently inspected, fuelled. Tail
+    // Grandfather's C172 — well-flown, recently inspected, fuelled. Tail
     // number "C-GPOP" carries the narrative.
     const SIM_DAY_MS = 24 * 60 * 60 * 1000;
-    const c152 = aircraftSeed.find((a) => a.id === "c152");
-    if (c152) {
+    const c172 = aircraftSeed.find((a) => a.id === "c172");
+    if (c172) {
       const daysSinceAnnual = 90;
       db.insert(ownedAircraft)
         .values({
           tailNumber: "C-GPOP",
-          aircraftTypeId: "c152",
+          aircraftTypeId: "c172",
           currentLocationIcao: STARTER_HOME_ICAO,
           airframeHours: 8500,
           engineHoursSinceOverhaul: 800,
           hoursSince100hr: 25,
           hoursSinceAnnual: daysSinceAnnual,
           annualDueAt: now + (365 - daysSinceAnnual) * SIM_DAY_MS,
-          fuelOnBoardGal: c152.fuelCapacityGal ?? 24.5,
+          fuelOnBoardGal: c172.fuelCapacityGal ?? 56,
           status: "available",
           purchasedAt: now,
           purchasePrice: 0,

@@ -88,6 +88,11 @@ export function LogbookFinances() {
                   cents={data.byCategory.aircraftSales}
                   positive
                 />
+                <LedgerLine
+                  label="Insurance payouts received"
+                  cents={data.byCategory.insurancePayouts}
+                  positive
+                />
               </LedgerSection>
 
               <LedgerSection heading="Costs">
@@ -96,6 +101,7 @@ export function LogbookFinances() {
                 <LedgerLine label="Aircraft purchases" cents={data.byCategory.aircraftPurchases} />
                 <LedgerLine label="Loan payments" cents={data.byCategory.loanPayments} />
                 <LedgerLine label="Maintenance" cents={data.byCategory.maintenanceCosts} />
+                <LedgerLine label="Insurance premiums" cents={data.byCategory.insurancePremiums} />
               </LedgerSection>
 
               <div className="mt-2 border-t border-ink-600 pt-3">

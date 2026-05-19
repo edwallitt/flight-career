@@ -2,6 +2,7 @@ import {
   priceAircraft,
   MAINTENANCE_SPECS,
   type AircraftClass,
+  type InsuranceTier,
   type MaintenanceType,
 } from "@flightcareer/shared";
 import { and, eq, ne } from "drizzle-orm";
@@ -10,6 +11,7 @@ import {
   aircraftTypes,
   airports,
   career,
+  insurancePolicies,
   loans,
   maintenanceEvents,
   ownedAircraft,
@@ -88,6 +90,12 @@ export interface OwnedAircraftDetail {
   monthlyFixedCostsCents: number;
   inProgressMaintenance: InProgressMaintenanceSummary | null;
   nextMonthlyCostAt: number;
+  // Active per-aircraft insurance policy summary. Null = uninsured (a
+  // legitimate choice — the UI shows a muted UNINSURED chip, not a warning).
+  insurance: {
+    tier: InsuranceTier;
+    monthlyPremiumCents: number;
+  } | null;
 }
 
 function buildDetail(
@@ -96,6 +104,7 @@ function buildDetail(
   airport: typeof airports.$inferSelect,
   loanRow: typeof loans.$inferSelect | null,
   inProgress: typeof maintenanceEvents.$inferSelect | null,
+  activePolicy: typeof insurancePolicies.$inferSelect | null,
   simNow: number,
 ): OwnedAircraftDetail {
   const engineRemaining = Math.max(
@@ -149,9 +158,22 @@ function buildDetail(
       })()
     : null;
 
+  // type.insuranceMonthly is the unavoidable baseline (liability/hangar
+  // cover, charged by processMonthlyOwnership regardless of policy choice).
+  // An active per-aircraft policy adds its premium ON TOP — the header's
+  // "Fixed / mo" must reflect what the player actually pays each month.
+  const insuranceField =
+    activePolicy && activePolicy.status === "active"
+      ? {
+          tier: activePolicy.tier,
+          monthlyPremiumCents: activePolicy.monthlyPremiumCents,
+        }
+      : null;
+
   const monthlyFixedCostsCents =
     type.hangarageMonthly +
     type.insuranceMonthly +
+    (insuranceField?.monthlyPremiumCents ?? 0) +
     (loanInfo && !loanInfo.fullyPaid ? loanInfo.monthlyPaymentCents : 0);
 
   const loanLtvRatio =
@@ -208,6 +230,7 @@ function buildDetail(
     estimatedValueCents,
     loanLtvRatio,
     monthlyFixedCostsCents,
+    insurance: insuranceField,
     inProgressMaintenance: inProgress
       ? {
           type: inProgress.type as MaintenanceType | "unscheduled",
@@ -261,6 +284,19 @@ export function getOwnedAircraft(): OwnedAircraftDetail[] {
     inProgressByAircraftId.set(ev.ownedAircraftId, ev);
   }
 
+  const policyRows = db
+    .select()
+    .from(insurancePolicies)
+    .where(eq(insurancePolicies.status, "active"))
+    .all();
+  const policyByAircraftId = new Map<
+    number,
+    typeof insurancePolicies.$inferSelect
+  >();
+  for (const p of policyRows) {
+    policyByAircraftId.set(p.ownedAircraftId, p);
+  }
+
   const details = rows.map(({ owned, type, ap }) =>
     buildDetail(
       owned,
@@ -268,6 +304,7 @@ export function getOwnedAircraft(): OwnedAircraftDetail[] {
       ap,
       loansByAircraftId.get(owned.id) ?? null,
       inProgressByAircraftId.get(owned.id) ?? null,
+      policyByAircraftId.get(owned.id) ?? null,
       simNow,
     ),
   );
@@ -305,7 +342,27 @@ export function getOwnedAircraftById(id: number): OwnedAircraftDetail | null {
       )
       .get() ?? null;
 
-  return buildDetail(row.owned, row.type, row.ap, loanRow, inProgressRow, simNow);
+  const activePolicy =
+    db
+      .select()
+      .from(insurancePolicies)
+      .where(
+        and(
+          eq(insurancePolicies.ownedAircraftId, id),
+          eq(insurancePolicies.status, "active"),
+        ),
+      )
+      .get() ?? null;
+
+  return buildDetail(
+    row.owned,
+    row.type,
+    row.ap,
+    loanRow,
+    inProgressRow,
+    activePolicy,
+    simNow,
+  );
 }
 
 export interface RefuelResult {

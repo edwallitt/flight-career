@@ -18,3 +18,23 @@ Then open http://localhost:5173. The frontend calls `health.ping` on the backend
 - `packages/shared` — Shared types, Zod schemas, pure domain logic
 - `drizzle/` — Drizzle Kit migrations
 - `data/career.sqlite` — SQLite database (gitignored, created at runtime)
+
+## Tests
+
+Every workspace uses [vitest](https://vitest.dev). Run them all:
+
+```sh
+pnpm test
+```
+
+…or target one workspace:
+
+```sh
+pnpm --filter @flightcareer/shared test   # pure-logic suites
+pnpm --filter @flightcareer/server test   # services + tRPC against a test SQLite DB
+pnpm --filter @flightcareer/web    test   # web helpers + React Testing Library
+```
+
+The web suite runs in jsdom with React Testing Library (`@testing-library/react`
++ `@testing-library/jest-dom`). Setup lives at
+`apps/web/src/__tests__/setup.ts`; config at `apps/web/vitest.config.ts`.

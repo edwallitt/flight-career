@@ -1,8 +1,10 @@
 import type {
+  ClaimOutcome,
   CompleteFlightOutput,
   EventSeverity,
   RiskTier,
 } from "@flightcareer/shared";
+import { INSURANCE_TIERS } from "@flightcareer/shared";
 import { useEffect, useRef, useState } from "react";
 import { formatCash, formatSimDateTime } from "../../lib/formatters.js";
 import {
@@ -49,6 +51,9 @@ export interface CompletionSummaryData extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
   unscheduledEvent: CompletionUnscheduledEvent | null;
+  // Present only when an unscheduled event occurred on an owned aircraft —
+  // the insurance split (or the uninsured / not-covered outcome).
+  insuranceClaim: ClaimOutcome | null;
   dispatcherSignoff: CompletionDispatcherSignoff | null;
   route: CompletionSummaryRoute;
 }
@@ -250,11 +255,14 @@ export function CompletionSummary({
 
   // Round-trip profit on this job: revenue minus every cost (including the
   // fuel that was paid pre-flight, and any unscheduled-maintenance bill the
-  // flight triggered). cashAppliedNow is the smaller delta that hits the
-  // cash account at the moment of completion (fuel was already deducted at
-  // brief time, so it isn't subtracted again here).
-  const eventCost = summary.unscheduledEvent?.costCents ?? 0;
-  const profit = summary.grossRevenue - summary.totalCosts - eventCost;
+  // flight triggered). When an insurance policy covered part of that bill,
+  // only the player-paid share hits the player's wallet — using the full
+  // event cost here would overstate the loss and contradict both the
+  // "Cash applied now" line and the insurance ledger shown in this modal.
+  const eventCostBorne = summary.insuranceClaim
+    ? summary.insuranceClaim.playerPaidCents
+    : summary.unscheduledEvent?.costCents ?? 0;
+  const profit = summary.grossRevenue - summary.totalCosts - eventCostBorne;
 
   // Pull origin/destination + block time from the canonical flight log entry.
   const { originIcao, destinationIcao, blockTimeMinutes } = summary.flightLogEntry;
@@ -364,7 +372,10 @@ export function CompletionSummary({
           )}
 
           {summary.unscheduledEvent && (
-            <UnscheduledEventCard event={summary.unscheduledEvent} />
+            <UnscheduledEventCard
+              event={summary.unscheduledEvent}
+              claim={summary.insuranceClaim}
+            />
           )}
 
           <div className="grid grid-cols-2 gap-5">
@@ -421,10 +432,15 @@ export function CompletionSummary({
                     emphasis="negative"
                   />
                 )}
-                {eventCost > 0 && (
+                {eventCostBorne > 0 && (
                   <CashLine
-                    label="Unscheduled maint."
-                    cents={eventCost}
+                    label={
+                      summary.insuranceClaim &&
+                      summary.insuranceClaim.insurerPaidCents > 0
+                        ? "Unscheduled maint. (after insurance)"
+                        : "Unscheduled maint."
+                    }
+                    cents={eventCostBorne}
                     sign="-"
                     emphasis="negative"
                   />
@@ -577,10 +593,113 @@ function formatSignoffByline(signoff: CompletionDispatcherSignoff): string | nul
   return signoff.dispatcherName ?? signoff.sourceLabel ?? null;
 }
 
-function UnscheduledEventCard({
+function LedgerRow({
+  label,
+  value,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  valueClass: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-0.5">
+      <span className="text-muted">{label}</span>
+      <span className={`tabular-nums ${valueClass}`}>{value}</span>
+    </div>
+  );
+}
+
+interface EventTone {
+  accent: string;
+  rule: string;
+}
+
+function UnscheduledEventLedger({
   event,
+  claim,
+  tone,
 }: {
   event: CompletionUnscheduledEvent;
+  claim: ClaimOutcome | null;
+  tone: EventTone;
+}) {
+  // Covered claim that actually paid out. Plain unsigned amounts that foot:
+  // full = insurer + deductible + excess; you pay = deductible + excess. The
+  // excess row only appears when the claim hit the per-claim ceiling — the
+  // gap that would otherwise make the ledger not add up.
+  if (claim && claim.covered && claim.insurerPaidCents > 0) {
+    const excessOverCeilingCents =
+      claim.playerPaidCents - claim.deductibleCents;
+    return (
+      <div className="mt-3 font-mono text-tiny">
+        <LedgerRow
+          label="Full cost"
+          value={formatCash(claim.fullEventCostCents)}
+          valueClass="text-text-high"
+        />
+        <LedgerRow
+          label={`Insurance (${claim.policyTier ? INSURANCE_TIERS[claim.policyTier].label : "—"}) covered`}
+          value={formatCash(claim.insurerPaidCents)}
+          valueClass="text-emerald-300"
+        />
+        <LedgerRow
+          label="Your deductible"
+          value={formatCash(claim.deductibleCents)}
+          valueClass="text-text-high"
+        />
+        {excessOverCeilingCents > 0 && (
+          <LedgerRow
+            label="Excess over claim ceiling"
+            value={formatCash(excessOverCeilingCents)}
+            valueClass="text-text-high"
+          />
+        )}
+        <div className={`my-1.5 h-px ${tone.rule}`} />
+        <LedgerRow
+          label="You pay"
+          value={formatCash(claim.playerPaidCents)}
+          valueClass={`${tone.accent} font-semibold`}
+        />
+      </div>
+    );
+  }
+
+  // Uninsured, severity-not-covered, or covered-but-under-deductible: the
+  // player bears the full (or small) cost; one line plus the reason.
+  const reason = !claim
+    ? null
+    : claim.policyTier === null
+      ? "Uninsured — full cost borne by you."
+      : claim.covered
+        ? `Covered, but the cost fell under your ${formatCash(claim.deductibleCents)} deductible — borne by you in full.`
+        : `${INSURANCE_TIERS[claim.policyTier].label} cover does not include ${event.severity} failures — full cost borne by you.`;
+  return (
+    <div className="mt-3 font-mono text-tiny">
+      <LedgerRow
+        label="Full cost"
+        value={formatCash(event.costCents)}
+        valueClass="text-text-high"
+      />
+      <div className={`my-1.5 h-px ${tone.rule}`} />
+      <LedgerRow
+        label="You pay"
+        value={formatCash(claim ? claim.playerPaidCents : event.costCents)}
+        valueClass={`${tone.accent} font-semibold`}
+      />
+      {reason && (
+        <div className="mt-1.5 text-[11px] text-muted">{reason}</div>
+      )}
+    </div>
+  );
+}
+
+function UnscheduledEventCard({
+  event,
+  claim,
+}: {
+  event: CompletionUnscheduledEvent;
+  claim: ClaimOutcome | null;
 }) {
   const isSevere = event.severity === "severe";
   const tone = isSevere
@@ -615,22 +734,18 @@ function UnscheduledEventCard({
         {event.description}
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-4 font-mono text-tiny">
-        <div className="flex flex-col">
-          <span className="label">Cost</span>
-          <span className={`mt-0.5 tabular-nums ${tone.accent}`}>
-            − {formatCash(event.costCents)}
-          </span>
-        </div>
-        {event.groundedDays > 0 && (
+      <UnscheduledEventLedger event={event} claim={claim} tone={tone} />
+
+      {event.groundedDays > 0 && (
+        <div className="mt-3 font-mono text-tiny">
           <div className="flex flex-col">
             <span className="label">Aircraft grounded</span>
             <span className="mt-0.5 tabular-nums text-text-high">
               {event.groundedDays} sim day{event.groundedDays === 1 ? "" : "s"}
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="mt-4">
         <div className="label">Contributing factors</div>

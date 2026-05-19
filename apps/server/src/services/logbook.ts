@@ -3,6 +3,7 @@ import {
   FERRY_VOICE_PROFILES,
   getClientById,
   type AircraftClass,
+  type InsuranceTier,
 } from "@flightcareer/shared";
 import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { db } from "../db/client.js";
@@ -11,6 +12,8 @@ import {
   airports,
   career,
   flights,
+  insuranceClaims,
+  insurancePolicies,
   jobs,
   loans,
   maintenanceEvents,
@@ -103,6 +106,13 @@ export interface FinancialSummary {
     aircraftSales: number;
     loanPayments: number;
     maintenanceCosts: number;
+    // Career-wide premium charges: Σ(monthly_premium × payments_made) over
+    // every policy (active and cancelled — they really did pay those).
+    insurancePremiums: number;
+    // Σ(insurer_paid_cents) across all claims — money the insurer paid on
+    // the player's behalf. A credit; lets the player judge, over a career,
+    // whether cover was worth it against insurancePremiums.
+    insurancePayouts: number;
   };
   netOverTime: Array<{ simTime: number; cumulativeNet: number }>;
 }
@@ -118,6 +128,14 @@ export interface MaintenanceLogRow {
   completedAt: number | null;
   description: string;
   status: "in_progress" | "completed" | "cancelled";
+  // Present only for unscheduled events an active policy paid out on. The
+  // maintenance ledger still shows the full `cost`; this surfaces the split.
+  insuranceClaim: {
+    policyTier: InsuranceTier;
+    deductiblePaidCents: number;
+    insurerPaidCents: number;
+    playerPaidCents: number;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,13 +452,33 @@ export function getFinancialSummary(input?: {
     maintenanceCosts += m.cost;
   }
 
-  const totalRevenue = flightRevenue + aircraftSales;
+  // Premiums: same approach as loan payments — Σ(monthly × paymentsMade)
+  // over every policy, including cancelled ones (they really were charged).
+  // Not windowed, mirroring the loan-payment total.
+  const allPolicies = db.select().from(insurancePolicies).all();
+  let insurancePremiums = 0;
+  for (const p of allPolicies) {
+    insurancePremiums += p.monthlyPremiumCents * p.paymentsMade;
+  }
+
+  // Payouts: money the insurer paid on the player's behalf. The
+  // maintenance_events ledger above counts the FULL event cost, so crediting
+  // the insurer's share back keeps `totalNet` reflecting the player's real
+  // outlay (full maintenance − insurer share + premiums).
+  const allClaims = db.select().from(insuranceClaims).all();
+  let insurancePayouts = 0;
+  for (const c of allClaims) {
+    insurancePayouts += c.insurerPaidCents;
+  }
+
+  const totalRevenue = flightRevenue + aircraftSales + insurancePayouts;
   const totalCosts =
     flightCosts +
     travelCosts +
     aircraftPurchases +
     loanPayments +
-    maintenanceCosts;
+    maintenanceCosts +
+    insurancePremiums;
   const totalNet = totalRevenue - totalCosts;
 
   // Build cumulative net time series from flight + transfer events ordered by
@@ -474,6 +512,8 @@ export function getFinancialSummary(input?: {
       aircraftSales,
       loanPayments,
       maintenanceCosts,
+      insurancePremiums,
+      insurancePayouts,
     },
     netOverTime,
   };
@@ -485,6 +525,8 @@ export function getMaintenanceEvents(): MaintenanceLogRow[] {
       ev: maintenanceEvents,
       owned: ownedAircraft,
       type: aircraftTypes,
+      claim: insuranceClaims,
+      policy: insurancePolicies,
     })
     .from(maintenanceEvents)
     .leftJoin(
@@ -495,10 +537,18 @@ export function getMaintenanceEvents(): MaintenanceLogRow[] {
       aircraftTypes,
       eq(ownedAircraft.aircraftTypeId, aircraftTypes.id),
     )
+    .leftJoin(
+      insuranceClaims,
+      eq(insuranceClaims.maintenanceEventId, maintenanceEvents.id),
+    )
+    .leftJoin(
+      insurancePolicies,
+      eq(insurancePolicies.id, insuranceClaims.policyId),
+    )
     .orderBy(desc(maintenanceEvents.startedAt))
     .all();
 
-  return rows.map(({ ev, owned, type }) => ({
+  return rows.map(({ ev, owned, type, claim, policy }) => ({
     id: ev.id,
     ownedAircraftId: ev.ownedAircraftId,
     aircraftLabel:
@@ -514,6 +564,15 @@ export function getMaintenanceEvents(): MaintenanceLogRow[] {
     completedAt: ev.completedAt,
     description: ev.description,
     status: ev.status,
+    insuranceClaim:
+      claim && policy
+        ? {
+            policyTier: policy.tier,
+            deductiblePaidCents: claim.deductiblePaidCents,
+            insurerPaidCents: claim.insurerPaidCents,
+            playerPaidCents: claim.playerPaidCents,
+          }
+        : null,
   }));
 }
 

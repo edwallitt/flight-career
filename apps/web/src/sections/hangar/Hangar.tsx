@@ -5,6 +5,7 @@ import { formatCash } from "../../lib/formatters.js";
 import { FleetCard } from "./FleetCard.js";
 import { HangarDrawer } from "./HangarDrawer.js";
 import { MaintenanceModal } from "./MaintenanceModal.js";
+import { InsuranceModal } from "./InsuranceModal.js";
 import { SaleModal } from "./SaleModal.js";
 import { PastAircraftSection } from "./PastAircraftSection.js";
 
@@ -16,6 +17,7 @@ export function Hangar() {
     | { id: number; highlight?: MaintenanceHighlight }
     | null
   >(null);
+  const [insuranceId, setInsuranceId] = useState<number | null>(null);
   const [saleId, setSaleId] = useState<number | null>(null);
   const [saleResult, setSaleResult] = useState<{
     tailNumber: string;
@@ -102,6 +104,7 @@ export function Hangar() {
                     onMaintenance={(highlight) =>
                       setMaintenance({ id: a.id, highlight })
                     }
+                    onInsurance={() => setInsuranceId(a.id)}
                     simNow={simNow}
                     isSelected={inspectId === a.id}
                   />
@@ -116,6 +119,7 @@ export function Hangar() {
           aircraftId={inspectId}
           onClose={() => setInspectId(null)}
           onRequestSell={(id) => setSaleId(id)}
+          onRequestInsurance={(id) => setInsuranceId(id)}
         />
       </div>
 
@@ -124,6 +128,13 @@ export function Hangar() {
           ownedAircraftId={maintenance.id}
           highlightType={maintenance.highlight}
           onClose={() => setMaintenance(null)}
+        />
+      )}
+
+      {insuranceId != null && (
+        <InsuranceModal
+          ownedAircraftId={insuranceId}
+          onClose={() => setInsuranceId(null)}
         />
       )}
 

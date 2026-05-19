@@ -15,6 +15,9 @@ interface LayerPanelProps {
   onChange: (next: AtlasLayerSet) => void;
   fuelOverlayType?: "avgas" | "jet-a";
   fuelOverlayRange?: FuelPriceRange | null;
+  // True only while an in_progress MSFS-tracked flight exists. The Live Track
+  // row + preset chip are hidden otherwise to keep the panel quiet.
+  hasTrackedFlight?: boolean;
 }
 
 function formatPriceCents(cents: number): string {
@@ -30,6 +33,9 @@ interface RowDef {
 
 // Layer presets — one-click "doctrine" chips. The user can still toggle
 // individual layers afterwards, but presets get them somewhere useful fast.
+// Presets always leave `trackedFlight: true` — when no active tracked flight
+// exists, the layer is a no-op; when one does, every preset should show it
+// by default (it's the highest-signal layer at that moment).
 const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
   {
     id: "all",
@@ -41,6 +47,7 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       recentFlights: true,
       jobs: true,
       playerLocation: true,
+      trackedFlight: true,
     },
   },
   {
@@ -53,6 +60,7 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       recentFlights: true,
       jobs: false,
       playerLocation: true,
+      trackedFlight: true,
     },
   },
   {
@@ -65,6 +73,7 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       recentFlights: false,
       jobs: false,
       playerLocation: true,
+      trackedFlight: true,
     },
   },
   {
@@ -77,6 +86,7 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       recentFlights: false,
       jobs: true,
       playerLocation: true,
+      trackedFlight: true,
     },
   },
   {
@@ -89,6 +99,7 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       recentFlights: false,
       jobs: false,
       playerLocation: true,
+      trackedFlight: true,
     },
   },
 ];
@@ -100,7 +111,8 @@ function shallowEq(a: AtlasLayerSet, b: AtlasLayerSet): boolean {
     a.ownedAircraft === b.ownedAircraft &&
     a.recentFlights === b.recentFlights &&
     a.jobs === b.jobs &&
-    a.playerLocation === b.playerLocation
+    a.playerLocation === b.playerLocation &&
+    a.trackedFlight === b.trackedFlight
   );
 }
 
@@ -208,6 +220,7 @@ export function LayerPanel({
   onChange,
   fuelOverlayType,
   fuelOverlayRange,
+  hasTrackedFlight = false,
 }: LayerPanelProps) {
   const toggle = (key: keyof AtlasLayerSet) =>
     onChange({ ...layers, [key]: !layers[key] });
@@ -258,6 +271,18 @@ export function LayerPanel({
       ),
     },
   ];
+
+  // Surface the live-track row only when a tracked flight is actually in
+  // progress. Players in manual mode (or with no active flight) never see it.
+  if (hasTrackedFlight) {
+    rows.push({
+      key: "trackedFlight",
+      label: "Live track",
+      swatch: (
+        <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(94,196,124,0.8)]" />
+      ),
+    });
+  }
 
   return (
     <div className="flex flex-col">

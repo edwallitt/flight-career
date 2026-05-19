@@ -376,6 +376,64 @@ export const maintenanceEvents = sqliteTable("maintenance_events", {
     .default("completed"),
 });
 
+// Per-aircraft insurance. One ACTIVE policy per aircraft; cancelled rows are
+// retained for claim history. Uniqueness of the active policy is enforced in
+// the buyPolicy service (same pattern as `loans` — no DB unique constraint),
+// since a partial unique index can't be expressed through a plain Drizzle
+// column. Premium/deductible/ceiling/insured-value are SNAPSHOTTED at
+// purchase and never float over the policy's life.
+export const insurancePolicies = sqliteTable("insurance_policies", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ownedAircraftId: integer("owned_aircraft_id")
+    .notNull()
+    .references(() => ownedAircraft.id),
+  // Persistence contract — must stay in sync with INSURANCE_TIER_ORDER /
+  // InsuranceTier in packages/shared/src/insurance/tiers.ts.
+  tier: text("tier", {
+    enum: ["basic", "standard", "comprehensive"],
+  }).notNull(),
+  monthlyPremiumCents: integer("monthly_premium_cents").notNull(),
+  insuredValueCents: integer("insured_value_cents").notNull(),
+  deductibleCents: integer("deductible_cents").notNull(),
+  perClaimCeilingCents: integer("per_claim_ceiling_cents").notNull(),
+  startedAt: integer("started_at").notNull(),
+  nextPremiumDueAt: integer("next_premium_due_at").notNull(),
+  // Incremented on every premium charge including the initial purchase
+  // charge. Mirrors loans.paymentsMade so career-wide premium totals can be
+  // computed as Σ(monthly_premium × payments_made) over all policies.
+  paymentsMade: integer("payments_made").notNull().default(0),
+  status: text("status", {
+    enum: ["active", "cancelled"],
+  })
+    .notNull()
+    .default("active"),
+});
+
+// Claim history. One row per unscheduled event where an active policy
+// covered the severity AND the insurer actually paid something
+// (insurer_paid_cents > 0). The maintenance_events row always records the
+// FULL event cost; the split lives here.
+export const insuranceClaims = sqliteTable("insurance_claims", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  policyId: integer("policy_id")
+    .notNull()
+    .references(() => insurancePolicies.id),
+  ownedAircraftId: integer("owned_aircraft_id")
+    .notNull()
+    .references(() => ownedAircraft.id),
+  maintenanceEventId: integer("maintenance_event_id")
+    .notNull()
+    .references(() => maintenanceEvents.id),
+  eventSeverity: text("event_severity", {
+    enum: ["light", "moderate", "severe"],
+  }).notNull(),
+  fullEventCostCents: integer("full_event_cost_cents").notNull(),
+  deductiblePaidCents: integer("deductible_paid_cents").notNull(),
+  insurerPaidCents: integer("insurer_paid_cents").notNull(),
+  playerPaidCents: integer("player_paid_cents").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
 export const transfers = sqliteTable("transfers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   type: text("type", {

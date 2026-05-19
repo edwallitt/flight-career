@@ -9,6 +9,7 @@ import {
   type AtlasFeatureRef,
   type AtlasJobFilters,
   type AtlasLayerSet,
+  type AtlasTrackedPosition,
 } from "../../components/map/AtlasMap.js";
 import { LayerPanel } from "./LayerPanel.js";
 import { FeatureDrawer } from "./FeatureDrawer.js";
@@ -21,6 +22,7 @@ const DEFAULT_LAYERS: AtlasLayerSet = {
   recentFlights: true,
   jobs: false,
   playerLocation: true,
+  trackedFlight: true,
 };
 
 const DEFAULT_JOB_FILTERS: AtlasJobFilters = {
@@ -30,8 +32,17 @@ const DEFAULT_JOB_FILTERS: AtlasJobFilters = {
 
 export function Atlas() {
   const navigate = useNavigate();
+  // Atlas data drives all map state. activeTrackedFlight is the single signal
+  // that an MSFS-tracked flight is in progress — the server only populates it
+  // when career.trackingMode === 'tracked' AND active state is in_progress.
+  // We bump the refetch cadence in that mode so the route line / completion
+  // surface appear quickly; otherwise it stays slow. No bridge-status poll
+  // here — that would burn cycles when MSFS is disabled or the player is in
+  // a manual flight, neither of which can produce live data to display.
+  const [isTracking, setIsTracking] = useState(false);
   const dataQuery = trpc.atlas.getData.useQuery(undefined, {
     staleTime: 30_000,
+    refetchInterval: isTracking ? 5_000 : 30_000,
     refetchOnWindowFocus: false,
   });
 
@@ -45,7 +56,52 @@ export function Atlas() {
   const [recentAutoDisabled, setRecentAutoDisabled] = useState(false);
   const prevJobsOn = useRef(layers.jobs);
 
-  const data: AtlasData | null = dataQuery.data ?? null;
+  const rawData: AtlasData | null = dataQuery.data ?? null;
+  const activeTracked = rawData?.activeTrackedFlight ?? null;
+
+  // Mirror activeTracked into `isTracking` so the next refetch interval picks
+  // up the faster cadence. Done in an effect rather than during render so
+  // react-query's `refetchInterval` option sees a stable value across renders.
+  useEffect(() => {
+    setIsTracking(activeTracked != null);
+  }, [activeTracked]);
+
+  // Live aircraft state — only polled when there's an in-progress tracked
+  // flight. We split this off from atlas.getData so the heavy query keeps its
+  // 30s cadence; the cheap currentState() poll drives the moving marker.
+  const bridgeState = trpc.simBridge.currentState.useQuery(undefined, {
+    enabled: activeTracked != null,
+    refetchInterval: 1_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const trackedPosition: AtlasTrackedPosition | null = useMemo(() => {
+    if (!activeTracked || !bridgeState.data) return null;
+    const s = bridgeState.data;
+    return {
+      lat: s.positionLat,
+      lon: s.positionLon,
+      headingDeg: s.trueHeadingDeg,
+      altitudeFt: s.altitudeFt,
+      groundSpeedKts: s.groundSpeedKts,
+      onGround: s.onGround,
+    };
+  }, [activeTracked, bridgeState.data]);
+
+  // The dispatched owned aircraft is rendered as the moving tracked marker.
+  // Hide it from the owned-aircraft layer so it doesn't simultaneously sit at
+  // the origin airport (ownedAircraft.currentLocationIcao isn't updated until
+  // completion). Other owned aircraft still render normally.
+  const data: AtlasData | null = useMemo(() => {
+    if (!rawData) return null;
+    if (!activeTracked || activeTracked.ownedAircraftId == null) return rawData;
+    return {
+      ...rawData,
+      ownedAircraft: rawData.ownedAircraft.filter(
+        (a) => a.id !== activeTracked.ownedAircraftId,
+      ),
+    };
+  }, [rawData, activeTracked]);
 
   // When the player toggles Open Jobs ON and Recent Flights is currently ON,
   // auto-disable Recent Flights (with a friendly notice). When the player
@@ -124,7 +180,11 @@ export function Atlas() {
             <span className="absolute inset-0 animate-ping rounded-full bg-amber-glow/50" />
             <span className="relative h-2 w-2 rounded-full bg-amber-glow" />
           </span>
-          {dataQuery.isPending ? "Acquiring…" : "Live · 30s"}
+          {dataQuery.isPending
+            ? "Acquiring…"
+            : isTracking
+              ? "Tracking · 5s"
+              : "Live · 30s"}
         </div>
       </div>
 
@@ -137,6 +197,7 @@ export function Atlas() {
             counts={{ ...counts, jobs: jobsBadgeCount }}
             fuelOverlayType={fuelOverlayType}
             fuelOverlayRange={fuelOverlayRange}
+            hasTrackedFlight={activeTracked != null}
           />
           {layers.jobs && data && (
             <JobsFilterPanel
@@ -160,6 +221,7 @@ export function Atlas() {
               selectedFeature={selected}
               onFeatureClick={setSelected}
               fuelOverlayType={fuelOverlayType}
+              trackedPosition={trackedPosition}
             />
           )}
           {!data && (
