@@ -4,7 +4,7 @@ import { CornerTicks } from "../../components/CornerTicks.js";
 
 const STORAGE_KEY = "flightcareer.welcomeSeen";
 
-// First-run welcome. The seeded inheritance places a C152 with tail "C-GPOP"
+// First-run welcome. The seeded inheritance places a C172 with tail "C-GPOP"
 // into the hangar; presence of that aircraft is the cheapest signal that this
 // is a freshly-seeded career. Closing the modal flips a localStorage key so
 // it doesn't reappear. If the player wipes the DB without clearing storage
@@ -20,8 +20,8 @@ export function WelcomeModal() {
     const fleet = owned.data;
     if (!fleet) return;
 
-    const hasInheritedC152 = fleet.some((a) => a.tailNumber === "C-GPOP");
-    if (hasInheritedC152) setOpen(true);
+    const hasInheritedC172 = fleet.some((a) => a.tailNumber === "C-GPOP");
+    if (hasInheritedC172) setOpen(true);
   }, [owned.data]);
 
   const close = () => {
@@ -66,7 +66,7 @@ export function WelcomeModal() {
           </p>
           <p>
             Your grandfather flew freight up the coast for thirty years. He left
-            you his Cessna 152 —{" "}
+            you his Cessna 172 Skyhawk —{" "}
             <span className="font-mono tracking-callsign text-amber-glow">
               C-GPOP
             </span>{" "}
