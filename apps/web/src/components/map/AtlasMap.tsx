@@ -85,12 +85,39 @@ export interface AtlasPlayer {
   simDateTime: number;
 }
 
+export interface AtlasActiveTrackedFlight {
+  jobId: number;
+  ownedAircraftId: number | null;
+  originIcao: string;
+  originName: string;
+  originLat: number;
+  originLon: number;
+  destinationIcao: string;
+  destinationName: string;
+  destinationLat: number;
+  destinationLon: number;
+  totalDistanceNm: number;
+}
+
+// Live aircraft state sampled from the SimBridge. Passed in separately from
+// `data` so the parent can poll it at 1Hz without invalidating the rest of
+// the atlas dataset.
+export interface AtlasTrackedPosition {
+  lat: number;
+  lon: number;
+  headingDeg: number;
+  altitudeFt: number;
+  groundSpeedKts: number;
+  onGround: boolean;
+}
+
 export interface AtlasData {
   airports: AtlasAirport[];
   ownedAircraft: AtlasOwnedAircraft[];
   recentFlights: AtlasRecentFlight[];
   jobs: AtlasJob[];
   player: AtlasPlayer | null;
+  activeTrackedFlight: AtlasActiveTrackedFlight | null;
 }
 
 export type AtlasFeatureRef =
@@ -106,6 +133,10 @@ export interface AtlasLayerSet {
   recentFlights: boolean;
   jobs: boolean;
   playerLocation: boolean;
+  // Live MSFS-tracked flight (route + moving aircraft marker). Layer is only
+  // meaningful while `data.activeTrackedFlight` is non-null — the LayerPanel
+  // suppresses the row otherwise.
+  trackedFlight: boolean;
 }
 
 export type AtlasJobClassFilter = "any" | AtlasJob["requiredClass"];
@@ -128,6 +159,10 @@ export interface AtlasMapProps {
   // Fuel type the overlay should color airports by. Driven by what the player
   // actually consumes (any jet/turbine → jet-a, else avgas).
   fuelOverlayType?: "avgas" | "jet-a";
+  // Live position from the SimBridge. Renders the moving aircraft glyph + the
+  // flown/remaining route split. Null while the bridge has no fresh sample
+  // (e.g. mid-reconnect) — the route line stays put but the marker freezes.
+  trackedPosition?: AtlasTrackedPosition | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +175,9 @@ const SRC_OWNED = "src-owned";
 const SRC_JOBS_LINES = "src-jobs-lines";
 const SRC_JOBS_POINTS = "src-jobs-points";
 const SRC_PLAYER = "src-player";
+const SRC_TRACKED_LINES = "src-tracked-lines";
+const SRC_TRACKED_POINTS = "src-tracked-points";
+const SRC_TRACKED_AIRCRAFT = "src-tracked-aircraft";
 
 const L_AIRPORT_HALO = "l-airport-halo"; // outer ring for major airports
 const L_AIRPORT_CIRCLE = "l-airport-circle";
@@ -159,6 +197,16 @@ const L_PLAYER_RING = "l-player-ring";
 const L_PLAYER_PULSE_A = "l-player-pulse-a";
 const L_PLAYER_PULSE_B = "l-player-pulse-b";
 const L_PLAYER_DOT = "l-player-dot";
+// Tracked-flight (live MSFS) layers. Flown = solid, remaining = dashed; the
+// origin/destination dots and live aircraft glyph sit on top.
+const L_TRACKED_REMAIN = "l-tracked-remain";
+const L_TRACKED_FLOWN_GLOW = "l-tracked-flown-glow";
+const L_TRACKED_FLOWN = "l-tracked-flown";
+const L_TRACKED_ORIGIN = "l-tracked-origin";
+const L_TRACKED_DEST = "l-tracked-dest";
+const L_TRACKED_AIRCRAFT_HALO = "l-tracked-aircraft-halo";
+const L_TRACKED_AIRCRAFT_BG = "l-tracked-aircraft-bg";
+const L_TRACKED_AIRCRAFT_ICON = "l-tracked-aircraft-icon";
 
 // Color helpers ------------------------------------------------------------
 
@@ -201,6 +249,9 @@ function jobLineColor(j: AtlasJob): string {
 
 
 const PLAYER_GREEN = "#5ec47c";
+// Tracked flight uses the same green as the player so the eye reads
+// "you are here, live" without a new color in the palette.
+const TRACKED_GREEN = "#5ec47c";
 
 // ---------------------------------------------------------------------------
 // Feature collection builders
@@ -358,6 +409,101 @@ function buildPlayerFC(
   };
 }
 
+// Split the tracked-flight great-circle route into a flown segment (origin →
+// current pos) and a remaining segment (current pos → destination). If we
+// have no live position yet, the whole route renders as "remaining".
+function buildTrackedLinesFC(
+  flight: AtlasActiveTrackedFlight | null,
+  pos: AtlasTrackedPosition | null,
+): FeatureCollection<LineString> {
+  if (!flight) return { type: "FeatureCollection", features: [] };
+
+  const origin: [number, number] = [flight.originLon, flight.originLat];
+  const dest: [number, number] = [flight.destinationLon, flight.destinationLat];
+
+  if (!pos) {
+    return {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          id: "tracked-remain",
+          geometry: { type: "LineString", coordinates: [origin, dest] },
+          properties: { kind: "remain" },
+        },
+      ],
+    };
+  }
+
+  const here: [number, number] = [pos.lon, pos.lat];
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: "tracked-flown",
+        geometry: { type: "LineString", coordinates: [origin, here] },
+        properties: { kind: "flown" },
+      },
+      {
+        type: "Feature",
+        id: "tracked-remain",
+        geometry: { type: "LineString", coordinates: [here, dest] },
+        properties: { kind: "remain" },
+      },
+    ],
+  };
+}
+
+function buildTrackedPointsFC(
+  flight: AtlasActiveTrackedFlight | null,
+): FeatureCollection<Point> {
+  if (!flight) return { type: "FeatureCollection", features: [] };
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: "tracked-origin",
+        geometry: {
+          type: "Point",
+          coordinates: [flight.originLon, flight.originLat],
+        },
+        properties: { kind: "origin", icao: flight.originIcao },
+      },
+      {
+        type: "Feature",
+        id: "tracked-dest",
+        geometry: {
+          type: "Point",
+          coordinates: [flight.destinationLon, flight.destinationLat],
+        },
+        properties: { kind: "destination", icao: flight.destinationIcao },
+      },
+    ],
+  };
+}
+
+function buildTrackedAircraftFC(
+  pos: AtlasTrackedPosition | null,
+): FeatureCollection<Point> {
+  if (!pos) return { type: "FeatureCollection", features: [] };
+  return {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: "tracked-aircraft",
+        geometry: { type: "Point", coordinates: [pos.lon, pos.lat] },
+        properties: {
+          heading: pos.headingDeg,
+          onGround: pos.onGround,
+        },
+      },
+    ],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Bounds: fit player + owned + airports that appear in any recent flight.
 // ---------------------------------------------------------------------------
@@ -419,6 +565,7 @@ export function AtlasMap({
   onFeatureClick,
   onFilteredJobsChange,
   fuelOverlayType = "jet-a",
+  trackedPosition = null,
 }: AtlasMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -528,6 +675,15 @@ export function AtlasMap({
     setSourceData(map, SRC_JOBS_LINES, buildJobLineFC(data.jobs));
     setSourceData(map, SRC_JOBS_POINTS, buildJobPointsFC(data.jobs));
     setSourceData(map, SRC_PLAYER, buildPlayerFC(data.player));
+    // Origin/destination dots track the atlas dataset (they only change when
+    // the active flight starts or ends), so they live with the main `data`
+    // effect. The route lines + moving aircraft are handled separately below
+    // so a 1Hz position update doesn't rebuild every other source.
+    setSourceData(
+      map,
+      SRC_TRACKED_POINTS,
+      buildTrackedPointsFC(data.activeTrackedFlight),
+    );
 
     if (!initialFitDone.current) {
       const bounds = computeBounds(data);
@@ -538,6 +694,24 @@ export function AtlasMap({
       updateHud();
     }
   }, [data, ready, updateHud]);
+
+  // Live tracked-flight sources. Split out so the 1Hz position update only
+  // diffs the two sources that actually move (route split + aircraft marker),
+  // rather than rebuilding the entire atlas feature set every second.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    setSourceData(
+      map,
+      SRC_TRACKED_LINES,
+      buildTrackedLinesFC(data.activeTrackedFlight, trackedPosition),
+    );
+    setSourceData(
+      map,
+      SRC_TRACKED_AIRCRAFT,
+      buildTrackedAircraftFC(trackedPosition),
+    );
+  }, [data.activeTrackedFlight, trackedPosition, ready]);
 
   // Toggle layer visibility.
   useEffect(() => {
@@ -569,6 +743,18 @@ export function AtlasMap({
     set(L_PLAYER_PULSE_A, visibleLayers.playerLocation);
     set(L_PLAYER_PULSE_B, visibleLayers.playerLocation);
     set(L_PLAYER_DOT, visibleLayers.playerLocation);
+    // Tracked flight: the row only matters when an active tracked flight is
+    // present, but we always honor the toggle so the player can hide it.
+    const trackedOn =
+      visibleLayers.trackedFlight && data.activeTrackedFlight != null;
+    set(L_TRACKED_REMAIN, trackedOn);
+    set(L_TRACKED_FLOWN_GLOW, trackedOn);
+    set(L_TRACKED_FLOWN, trackedOn);
+    set(L_TRACKED_ORIGIN, trackedOn);
+    set(L_TRACKED_DEST, trackedOn);
+    set(L_TRACKED_AIRCRAFT_HALO, trackedOn);
+    set(L_TRACKED_AIRCRAFT_BG, trackedOn);
+    set(L_TRACKED_AIRCRAFT_ICON, trackedOn);
 
     if (map.getLayer(L_AIRPORT_CIRCLE)) {
       const colorExpr = visibleLayers.fuelPrices
@@ -595,7 +781,13 @@ export function AtlasMap({
         ] as never,
       );
     }
-  }, [visibleLayers, data.airports, ready, fuelOverlayType]);
+  }, [
+    visibleLayers,
+    data.airports,
+    data.activeTrackedFlight,
+    ready,
+    fuelOverlayType,
+  ]);
 
   // ----- Apply job filters via setFilter (no data refetch needed) -----
   useEffect(() => {
@@ -831,6 +1023,9 @@ function installSources(map: MlMap) {
   map.addSource(SRC_JOBS_LINES, { type: "geojson", data: emptyFc() });
   map.addSource(SRC_JOBS_POINTS, { type: "geojson", data: emptyFc() });
   map.addSource(SRC_PLAYER, { type: "geojson", data: emptyFc() });
+  map.addSource(SRC_TRACKED_LINES, { type: "geojson", data: emptyFc() });
+  map.addSource(SRC_TRACKED_POINTS, { type: "geojson", data: emptyFc() });
+  map.addSource(SRC_TRACKED_AIRCRAFT, { type: "geojson", data: emptyFc() });
 }
 
 function installLayers(map: MlMap) {
@@ -1123,6 +1318,119 @@ function installLayers(map: MlMap) {
       "circle-color": PLAYER_GREEN,
       "circle-stroke-color": MAP_PALETTE.background,
       "circle-stroke-width": 1.5,
+    },
+  });
+
+  // ---- Tracked flight (live MSFS) ----
+  // Remaining segment is rendered first so the flown segment + the aircraft
+  // marker can sit on top of it. The flown segment is drawn as a soft glow
+  // plus a solid line — the same idiom as the recent-flight layer, just
+  // brighter to read as "live" rather than "history".
+  map.addLayer({
+    id: L_TRACKED_REMAIN,
+    type: "line",
+    source: SRC_TRACKED_LINES,
+    filter: ["==", ["get", "kind"], "remain"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": TRACKED_GREEN,
+      "line-width": 1.4,
+      "line-dasharray": [3, 3],
+      "line-opacity": 0.55,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_FLOWN_GLOW,
+    type: "line",
+    source: SRC_TRACKED_LINES,
+    filter: ["==", ["get", "kind"], "flown"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": TRACKED_GREEN,
+      "line-width": 6,
+      "line-blur": 4,
+      "line-opacity": 0.25,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_FLOWN,
+    type: "line",
+    source: SRC_TRACKED_LINES,
+    filter: ["==", ["get", "kind"], "flown"],
+    layout: { "line-cap": "round", "line-join": "round" },
+    paint: {
+      "line-color": TRACKED_GREEN,
+      "line-width": 2,
+      "line-opacity": 0.95,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_ORIGIN,
+    type: "circle",
+    source: SRC_TRACKED_POINTS,
+    filter: ["==", ["get", "kind"], "origin"],
+    paint: {
+      "circle-radius": 4,
+      "circle-color": TRACKED_GREEN,
+      "circle-stroke-color": MAP_PALETTE.background,
+      "circle-stroke-width": 1.5,
+      "circle-opacity": 0.95,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_DEST,
+    type: "circle",
+    source: SRC_TRACKED_POINTS,
+    filter: ["==", ["get", "kind"], "destination"],
+    paint: {
+      "circle-radius": 4.5,
+      "circle-color": "transparent",
+      "circle-stroke-color": TRACKED_GREEN,
+      "circle-stroke-width": 1.6,
+      "circle-opacity": 1,
+    },
+  });
+  // Aircraft disc + plane silhouette. The disc is a small dark backplate so
+  // the green glyph stays legible over light terrain tiles.
+  map.addLayer({
+    id: L_TRACKED_AIRCRAFT_HALO,
+    type: "circle",
+    source: SRC_TRACKED_AIRCRAFT,
+    paint: {
+      "circle-radius": 14,
+      "circle-color": TRACKED_GREEN,
+      "circle-opacity": 0.12,
+      "circle-stroke-color": TRACKED_GREEN,
+      "circle-stroke-width": 1,
+      "circle-stroke-opacity": 0.5,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_AIRCRAFT_BG,
+    type: "circle",
+    source: SRC_TRACKED_AIRCRAFT,
+    paint: {
+      "circle-radius": 8,
+      "circle-color": MAP_PALETTE.background,
+      "circle-opacity": 0.85,
+      "circle-stroke-color": TRACKED_GREEN,
+      "circle-stroke-width": 1.5,
+    },
+  });
+  map.addLayer({
+    id: L_TRACKED_AIRCRAFT_ICON,
+    type: "symbol",
+    source: SRC_TRACKED_AIRCRAFT,
+    layout: {
+      "icon-image": PLANE_IMAGE_ID,
+      "icon-size": 0.4,
+      "icon-rotate": ["get", "heading"],
+      "icon-rotation-alignment": "map",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
+    },
+    paint: {
+      "icon-color": TRACKED_GREEN,
     },
   });
 

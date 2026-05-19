@@ -95,12 +95,31 @@ export interface AtlasPlayer {
   simDateTime: number;
 }
 
+// Route + crewed-aircraft reference for the in-progress *tracked* flight. The
+// live position (lat/lon/heading) is NOT included here — Atlas pulls that
+// separately via simBridge.currentState so atlas.getData can keep its 30s
+// cadence without churning every airport row at 1Hz.
+export interface AtlasActiveTrackedFlight {
+  jobId: number;
+  ownedAircraftId: number | null;
+  originIcao: string;
+  originName: string;
+  originLat: number;
+  originLon: number;
+  destinationIcao: string;
+  destinationName: string;
+  destinationLat: number;
+  destinationLon: number;
+  totalDistanceNm: number;
+}
+
 export interface AtlasData {
   airports: AtlasAirport[];
   ownedAircraft: AtlasOwnedAircraft[];
   recentFlights: AtlasRecentFlight[];
   jobs: AtlasJob[];
   player: AtlasPlayer | null;
+  activeTrackedFlight: AtlasActiveTrackedFlight | null;
 }
 
 export function getAtlasData(): AtlasData {
@@ -294,11 +313,47 @@ export function getAtlasData(): AtlasData {
     }
   }
 
+  // Active tracked flight (MSFS): exposed only when the career singleton has
+  // an in_progress flight in tracked mode. Manual flights don't render a live
+  // marker on the Atlas — they show up under recentFlights once completed.
+  let activeTrackedFlight: AtlasActiveTrackedFlight | null = null;
+  if (
+    careerRow?.activeJobId != null &&
+    careerRow.activeFlightState === "in_progress" &&
+    careerRow.trackingMode === "tracked"
+  ) {
+    const activeJobRow = db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.id, careerRow.activeJobId))
+      .get();
+    if (activeJobRow) {
+      const origin = airportByIcao.get(activeJobRow.originIcao);
+      const dest = airportByIcao.get(activeJobRow.destinationIcao);
+      if (origin && dest) {
+        activeTrackedFlight = {
+          jobId: activeJobRow.id,
+          ownedAircraftId: careerRow.activeAircraftOwnedId ?? null,
+          originIcao: origin.icao,
+          originName: origin.name,
+          originLat: origin.lat,
+          originLon: origin.lon,
+          destinationIcao: dest.icao,
+          destinationName: dest.name,
+          destinationLat: dest.lat,
+          destinationLon: dest.lon,
+          totalDistanceNm: Math.round(activeJobRow.distanceNm),
+        };
+      }
+    }
+  }
+
   return {
     airports: atlasAirports,
     ownedAircraft: atlasOwned,
     recentFlights,
     jobs: atlasJobs,
     player,
+    activeTrackedFlight,
   };
 }

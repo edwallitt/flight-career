@@ -10,9 +10,13 @@ pnpm monorepo. Three packages, all `@flightcareer/*`:
 
 - `apps/server` — Hono + tRPC v11 + Drizzle + better-sqlite3. SQLite DB at
   `data/career.sqlite`.
-- `apps/web` — Vite + React 18 + Tailwind + tRPC client + react-query.
+- `apps/web` — Vite + React 18 + Tailwind + tRPC client + react-query. Has
+  vitest with jsdom + React Testing Library for unit and component tests.
 - `packages/shared` — pure TS, no I/O. Holds the job-generation engine, client
   definitions, and shared types/zod schemas. **vitest** lives here.
+
+All three workspaces run vitest. The server uses a sequential file runner
+(`fileParallelism: false`) because tests share a worker-scoped temp SQLite DB.
 
 Server exposes its `AppRouter` type via the `./router` export so the web app
 can `import type { AppRouter } from "@flightcareer/server/router"` for full
@@ -32,10 +36,16 @@ this project is pnpm-only.
 - `pnpm db:migrate` — apply pending migrations. The `apps/server/dev` script
   does NOT auto-migrate; run this explicitly.
 - `pnpm --filter @flightcareer/server db:seed` — idempotent; safe to re-run.
-- `pnpm --filter @flightcareer/shared test` — vitest run.
+- `pnpm test` — runs all three workspaces' vitest suites (shared → server → web).
+- `pnpm --filter @flightcareer/shared test` — pure-logic suites only (fast).
+- `pnpm --filter @flightcareer/server test` — service + tRPC integration suites
+  (touches the test SQLite DB).
+- `pnpm --filter @flightcareer/web test` — frontend unit + RTL component tests
+  (jsdom env).
 
-Definition of done before reporting a task complete: run shared tests, server
-typecheck, and web `tsc -b`.
+Definition of done before reporting a task complete: `pnpm test` (all three
+workspaces green), server typecheck, and web `tsc -b` (the build step also
+runs `tsc -b`).
 
 ## Domain invariants (these will bite you)
 
@@ -123,7 +133,51 @@ to hide it behind a dev flag once the player progression loop lands.
 
 ## Testing
 
-In order to test you can connect to Chrome directly and use the browser to test. This is using the Claude plugin for chrome.
+### Automated tests
+
+Each workspace has its own vitest config. Run them all with `pnpm test`, or
+target one workspace with `pnpm --filter @flightcareer/<name> test`.
+
+- **`packages/shared`** — pure-logic suites for the job generator, pay
+  calculator, marketplace/maintenance pricing, lifecycle helpers, etc. No DB,
+  no I/O. Deterministic via `seedrandom`. Add new shared tests under
+  `<module>/__tests__/*.test.ts`.
+
+- **`apps/server`** — service + tRPC tests against a real SQLite database.
+  - Config: `apps/server/vitest.config.ts` (`fileParallelism: false`, setup file
+    at `src/__tests__/helpers/setup-env.ts`).
+  - Shared fixtures: `src/__tests__/helpers/fixtures.ts` exports `resetTestDb`,
+    `insertJob`, `insertOwnedAircraft`, `insertFlight`, `getCareer`. Catalog
+    tables (airports, aircraft types) are seeded once per worker; mutable rows
+    are wiped between tests with FKs temporarily off. `resetTestDb` accepts
+    overrides for `cash`, `simNow`, `currentLocation`, `startingRoleRep`,
+    `ratingsEarned`, `rentalsAt`.
+  - Default fixture state: career `id=1`, pilot `TestPilot`, cash `$10k`,
+    location `CYHZ`, sim time `2026-01-01 UTC`, SEP rating earned, role rep 25,
+    a bonanza_g36 rental at the player's location.
+  - Pattern: `beforeEach(() => resetTestDb({ ... }))`, then drive the service
+    you're testing and assert on rows via Drizzle.
+
+- **`apps/web`** — vitest in jsdom + React Testing Library.
+  - Config: `apps/web/vitest.config.ts` (jsdom env, react plugin).
+  - Setup: `apps/web/src/__tests__/setup.ts` installs
+    `@testing-library/jest-dom/vitest` matchers and runs `cleanup()` after each
+    test (vitest with `globals: false` doesn't auto-cleanup).
+  - Use this for: pure web helpers (`lib/formatters.ts`,
+    `lib/engineHealth.ts`), and component rendering tests via RTL.
+  - Component tests should use `screen.getByText` / `getByRole` (avoid
+    snapshotting the dispatch-terminal markup — corner ticks and class soup
+    make snapshots noisy and useless).
+  - Components that hit the tRPC client need a query client + tRPC provider
+    wrapper; no fixture for that exists yet — add one when the first such test
+    lands.
+
+### Manual / browser testing
+
+For UI work you can also drive the app directly via the Claude-in-Chrome
+plugin (connect to Chrome, navigate to `http://localhost:5173`, interact).
+Useful for visual regressions and end-to-end smoke checks that RTL can't
+cover.
 
 ## What's intentionally stubbed
 
