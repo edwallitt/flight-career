@@ -16,4 +16,5 @@ export * from "./travel/index.js";
 export * from "./marketplace/index.js";
 export * from "./career/index.js";
 export * from "./maintenance/index.js";
+export * from "./insurance/index.js";
 export * from "./fuel/index.js";

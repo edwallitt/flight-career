@@ -61,14 +61,24 @@ export function LogbookMaintenance() {
                 </Td>
                 <Td className="text-text">{r.aircraftLabel}</Td>
                 <Td>
-                  <span
-                    className={[
-                      "inline-flex items-center rounded-sm border px-2 py-0.5 font-mono text-[10px] uppercase tracking-callsign",
-                      TYPE_TONE[r.type] ?? "",
-                    ].join(" ")}
-                  >
-                    {TYPE_LABEL[r.type] ?? r.type}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={[
+                        "inline-flex items-center rounded-sm border px-2 py-0.5 font-mono text-[10px] uppercase tracking-callsign",
+                        TYPE_TONE[r.type] ?? "",
+                      ].join(" ")}
+                    >
+                      {TYPE_LABEL[r.type] ?? r.type}
+                    </span>
+                    {r.insuranceClaim && (
+                      <span
+                        title={`${r.insuranceClaim.policyTier} cover · insurer paid ${formatCash(r.insuranceClaim.insurerPaidCents)}, deductible ${formatCash(r.insuranceClaim.deductiblePaidCents)}`}
+                        className="inline-flex items-center rounded-sm border border-sky-500/50 bg-sky-500/[0.08] px-2 py-0.5 font-mono text-[10px] uppercase tracking-callsign text-sky-300"
+                      >
+                        Insured
+                      </span>
+                    )}
+                  </div>
                 </Td>
                 <Td>
                   <span
@@ -83,8 +93,17 @@ export function LogbookMaintenance() {
                 <Td className="text-right font-mono tabular-nums text-urgency-critical">
                   −{formatCash(r.cost)}
                 </Td>
-                <Td className="truncate text-tiny text-muted">
-                  {r.description}
+                <Td className="text-tiny text-muted">
+                  <div className="truncate">{r.description}</div>
+                  {r.insuranceClaim && (
+                    <div className="mt-0.5 font-mono text-[10px] text-sky-300/80">
+                      Insurer paid {formatCash(r.insuranceClaim.insurerPaidCents)}
+                      {" · "}deductible{" "}
+                      {formatCash(r.insuranceClaim.deductiblePaidCents)}
+                      {" · "}you paid{" "}
+                      {formatCash(r.insuranceClaim.playerPaidCents)}
+                    </div>
+                  )}
                 </Td>
               </tr>
             ))}

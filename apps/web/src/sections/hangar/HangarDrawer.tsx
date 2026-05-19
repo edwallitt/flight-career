@@ -95,10 +95,12 @@ export function HangarDrawer({
   aircraftId,
   onClose,
   onRequestSell,
+  onRequestInsurance,
 }: {
   aircraftId: number | null;
   onClose: () => void;
   onRequestSell: (id: number) => void;
+  onRequestInsurance: (id: number) => void;
 }) {
   const open = aircraftId != null;
   const utils = trpc.useUtils();
@@ -426,6 +428,16 @@ export function HangarDrawer({
             : aircraft && fuelNeededGal > 0 && aircraft.locationHasFuel
               ? `Refuel · ${formatCash(refuelCost)}`
               : "Refuel"}
+        </button>
+        <button
+          type="button"
+          disabled={!aircraft}
+          onClick={() => aircraft && onRequestInsurance(aircraft.id)}
+          className="flex-1 rounded-sm border border-ink-600 bg-ink-750 py-3 font-mono text-[12px] uppercase tracking-callsign text-muted hover:text-sky-300 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {aircraft?.insurance
+            ? `Insurance · ${aircraft.insurance.tier}`
+            : "Insurance"}
         </button>
         <button
           type="button"

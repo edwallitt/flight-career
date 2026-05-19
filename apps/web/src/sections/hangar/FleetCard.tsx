@@ -1,6 +1,11 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@flightcareer/server/router";
-import { assessRisk, RISK_TIER_LABEL, type RiskTier } from "@flightcareer/shared";
+import {
+  assessRisk,
+  INSURANCE_TIERS,
+  RISK_TIER_LABEL,
+  type RiskTier,
+} from "@flightcareer/shared";
 import { trpc } from "../../trpc.js";
 import { formatCash } from "../../lib/formatters.js";
 import {
@@ -109,12 +114,14 @@ export function FleetCard({
   aircraft,
   onInspect,
   onMaintenance,
+  onInsurance,
   simNow,
   isSelected,
 }: {
   aircraft: FleetItem;
   onInspect: () => void;
   onMaintenance: (highlight?: MaintenanceHighlight) => void;
+  onInsurance: () => void;
   simNow: number;
   isSelected: boolean;
 }) {
@@ -284,6 +291,25 @@ export function FleetCard({
             ].join(" ")}
           >
             {RISK_TIER_LABEL[risk.tier]}
+          </button>
+          <button
+            type="button"
+            onClick={onInsurance}
+            title={
+              aircraft.insurance
+                ? `Insured · ${INSURANCE_TIERS[aircraft.insurance.tier].label} · ${formatCash(aircraft.insurance.monthlyPremiumCents)}/mo`
+                : "Not insured — buy a policy"
+            }
+            className={[
+              "cursor-pointer rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign transition-colors hover:brightness-125",
+              aircraft.insurance
+                ? "border-sky-500/50 bg-sky-500/[0.08] text-sky-300"
+                : "border-ink-600 bg-ink-750 text-muted-dim",
+            ].join(" ")}
+          >
+            {aircraft.insurance
+              ? `Insured · ${aircraft.insurance.tier}`
+              : "Uninsured"}
           </button>
           <span
             className={[

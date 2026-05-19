@@ -5,6 +5,8 @@ import {
   generateEvent,
   getClientById,
   haversineNm,
+  resolveClaim,
+  type ClaimOutcome,
   type CompleteFlightInput,
   type CompleteFlightOutput,
   type RiskAssessment,
@@ -21,6 +23,7 @@ import {
   career,
   flights,
   jobs,
+  insuranceClaims,
   maintenanceEvents,
   ownedAircraft,
   ratings,
@@ -38,6 +41,7 @@ import {
   fuelPriceCentsPerGal,
   type LifecycleResult,
 } from "./shared.js";
+import { getActivePolicyForAircraft } from "../insurance.js";
 
 const HUNDRED_HR_INSPECTION_THRESHOLD = 100;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -354,6 +358,10 @@ export interface CompletionSummaryPayload extends CompleteFlightOutput {
   inspectionAlerts: string[];
   cashAppliedNow: number;
   unscheduledEvent: PostFlightUnscheduledEvent | null;
+  // Present only when an unscheduled event occurred on an OWNED aircraft.
+  // Carries the insurance split (or the uninsured / not-covered outcome).
+  // Null for rental/ferry flights and when no event occurred.
+  insuranceClaim: ClaimOutcome | null;
   // Generated asynchronously after the txn commits, then merged into the
   // response. Null when no API key, generation failed, or validation rejected
   // the output — the UI just omits the section.
@@ -692,6 +700,9 @@ export function completeFlightAction(
     // this as fly-out mechanics — the work happens where the aircraft is.
     // -----------------------------------------------------------------
     let unscheduledOut: PostFlightUnscheduledEvent | null = null;
+    // Set whenever an unscheduled event occurs on this owned aircraft —
+    // carries the insurance split (or the uninsured / not-covered outcome).
+    let claimOutcome: ClaimOutcome | null = null;
     if (postFlightOwned && summary.aircraftUpdates) {
       // Translate days-since-last-annual from the annualDueAt anchor so it
       // matches the pure logic's expectations (>365 = overdue).
@@ -733,6 +744,9 @@ export function completeFlightAction(
         const status: "in_progress" | "completed" =
           event.groundedDays > 0 ? "in_progress" : "completed";
 
+        // The maintenance_events row always records the FULL event cost —
+        // the event genuinely cost that much. The insurance split lives only
+        // on the insurance_claims row.
         const insert = tx
           .insert(maintenanceEvents)
           .values({
@@ -746,18 +760,50 @@ export function completeFlightAction(
             status,
           })
           .run();
+        const maintenanceEventId = Number(insert.lastInsertRowid);
 
-        // Deduct event cost from cash. Career row was already updated
-        // earlier in this txn — re-read to get the current value. The row
-        // must exist (we read it at the top of the txn); if it's gone now,
-        // something has corrupted the txn state, so abort hard rather than
-        // silently dropping the deduction.
+        // Resolve the event against any ACTIVE insurance policy on this
+        // aircraft. Uninsured / not-covered still produces an outcome (the
+        // player simply pays in full) so the completion summary can explain
+        // the result either way.
+        const policy = getActivePolicyForAircraft(postFlightOwned.id, tx);
+        claimOutcome = resolveClaim({
+          policyTier: policy ? policy.tier : null,
+          eventSeverity: event.severity,
+          eventCostCents: event.costCents,
+        });
+
+        // Record a claim row only when the policy actually paid out — a
+        // covered-but-under-deductible event pays nothing and is kept off
+        // the claims ledger (mirrors the spec's "insurerPaid > 0" rule).
+        if (policy && claimOutcome.covered && claimOutcome.insurerPaidCents > 0) {
+          tx.insert(insuranceClaims)
+            .values({
+              policyId: policy.id,
+              ownedAircraftId: postFlightOwned.id,
+              maintenanceEventId,
+              eventSeverity: event.severity,
+              fullEventCostCents: claimOutcome.fullEventCostCents,
+              deductiblePaidCents: claimOutcome.deductibleCents,
+              insurerPaidCents: claimOutcome.insurerPaidCents,
+              playerPaidCents: claimOutcome.playerPaidCents,
+              createdAt: simNow,
+            })
+            .run();
+        }
+
+        // Deduct only what the player actually owes (deductible + any excess
+        // over the ceiling, or the full cost when uninsured/not-covered).
+        // Career row was already updated earlier in this txn — re-read to get
+        // the current value. The row must exist (we read it at the top of the
+        // txn); if it's gone now, something has corrupted the txn state, so
+        // abort hard rather than silently dropping the deduction.
         const careerNow = tx.select().from(career).where(eq(career.id, 1)).get();
         if (!careerNow) {
           throw new Error("Career row vanished mid-completion");
         }
         tx.update(career)
-          .set({ cash: careerNow.cash - event.costCents })
+          .set({ cash: careerNow.cash - claimOutcome.playerPaidCents })
           .where(eq(career.id, 1))
           .run();
 
@@ -839,8 +885,12 @@ export function completeFlightAction(
       .where(eq(jobs.id, jobRow.id))
       .run();
 
+    // The player only pays what the claim resolution says they owe — the
+    // deductible plus any excess over the ceiling, or the full cost when
+    // uninsured / not covered. claimOutcome is set whenever an event
+    // occurred (insured or not).
     const cashAppliedNow =
-      summary.netCashDelta - (unscheduledOut?.costCents ?? 0);
+      summary.netCashDelta - (claimOutcome?.playerPaidCents ?? 0);
 
     // -----------------------------------------------------------------
     // Sign-off context — gathered inside the txn so we have a consistent
@@ -938,6 +988,7 @@ export function completeFlightAction(
       inspectionAlerts: inspectionLines,
       cashAppliedNow,
       unscheduledEvent: unscheduledOut,
+      insuranceClaim: claimOutcome,
       dispatcherSignoff: null,
       route: {
         originIcao: jobOriginRow.icao,
