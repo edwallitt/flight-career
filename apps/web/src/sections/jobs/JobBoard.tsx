@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { trpc } from "../../trpc.js";
+import { FitLegend } from "./FitLegend.js";
+import { FleetStrip } from "./FleetStrip.js";
 import { FuelShockBanner } from "./FuelShockBanner.js";
 import { JobDrawer } from "./JobDrawer.js";
 import { JobFilters } from "./JobFilters.js";
 import { JobTable } from "./JobTable.js";
 import type {
   ClassFilter,
+  FleetReadout,
   JobRow,
   RoleFilter,
   SortState,
@@ -13,17 +16,36 @@ import type {
 
 const CLASS_RANK: Record<string, number> = { SEP: 0, MEP: 1, SET: 2, JET: 3 };
 
+const EMPTY_FLEET: FleetReadout = {
+  ownedHere: [],
+  ownedElsewhere: 0,
+  rentalsHere: [],
+};
+
 export function JobBoard() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [classFilter, setClassFilter] = useState<ClassFilter>("any");
-  const [reachableOnly, setReachableOnly] = useState(true);
+  // "Flyable now" replaces the old "reachable only" toggle — it filters to
+  // jobs whose fit.status is ready or reposition, i.e. there's an aircraft
+  // the player can actually dispatch right now that satisfies payload,
+  // range, and capability. Default on; the player can drop it to see the
+  // upgrade-target jobs that need a bigger aircraft.
+  const [flyableOnly, setFlyableOnly] = useState(true);
   const [atMyLocationOnly, setAtMyLocationOnly] = useState(false);
-  const [sort, setSort] = useState<SortState>({ key: "pay", dir: "desc" });
+  // Pay/hour is the column the player actually cares about: pay normalized
+  // by positioning + flight time. Default descending so the best return on
+  // the next leg of flying is right at the top.
+  const [sort, setSort] = useState<SortState>({ key: "payHour", dir: "desc" });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Pause flag — set true while the player is hovering the table or has a
+  // drawer open. While paused, the 10s refetch is suspended so rows don't
+  // re-sort under the cursor mid-click.
+  const [interactionPaused, setInteractionPaused] = useState(false);
 
   const utils = trpc.useUtils();
+  const drawerOpen = selectedId != null;
   const list = trpc.jobs.listWithReachability.useQuery(undefined, {
-    refetchInterval: 10_000,
+    refetchInterval: interactionPaused || drawerOpen ? false : 10_000,
   });
   const career = trpc.career.get.useQuery();
   const tickNow = trpc.jobs.tickNow.useMutation({
@@ -37,14 +59,14 @@ export function JobBoard() {
 
   const allJobs: JobRow[] = list.data?.jobs ?? [];
   const playerLocationIcao = list.data?.playerLocationIcao ?? "";
+  const recommendedJobId = list.data?.recommendedJobId ?? null;
+  const fleet = list.data?.fleet ?? EMPTY_FLEET;
 
   const filteredJobs = useMemo(() => {
     return allJobs.filter((j) => {
       if (roleFilter === "ferry") {
         if (j.jobType !== "ferry") return false;
       } else if (roleFilter !== "all") {
-        // Non-ferry filters check the role; ferry rows have role="open" but
-        // shouldn't appear under the OPN chip — they have their own FRY chip.
         if (j.jobType === "ferry") return false;
         if (j.role !== roleFilter) return false;
       }
@@ -54,7 +76,12 @@ export function JobBoard() {
       ) {
         return false;
       }
-      if (reachableOnly && j.reachability.status === "unreachable") {
+      // Flyable-now keeps ready + reposition. wont_fit + locked are hidden.
+      if (
+        flyableOnly &&
+        j.fit.status !== "ready" &&
+        j.fit.status !== "reposition"
+      ) {
         return false;
       }
       if (atMyLocationOnly && j.originIcao !== playerLocationIcao) {
@@ -62,10 +89,20 @@ export function JobBoard() {
       }
       return true;
     });
-  }, [allJobs, roleFilter, classFilter, reachableOnly, atMyLocationOnly, playerLocationIcao]);
+  }, [
+    allJobs,
+    roleFilter,
+    classFilter,
+    flyableOnly,
+    atMyLocationOnly,
+    playerLocationIcao,
+  ]);
 
-  const simNow = career.data?.simDateTime ?? Date.now();
-  const drawerOpen = selectedId != null;
+  // Sim time for relative-time formatting in rows. Prefer the value the
+  // jobs query already returned (single source of truth, no clock skew
+  // between two endpoints) and fall back to the career endpoint.
+  const simNow =
+    list.data?.simNow ?? career.data?.simDateTime ?? Date.now();
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -98,7 +135,8 @@ export function JobBoard() {
                   <span
                     className={[
                       "h-1.5 w-1.5 rounded-full",
-                      u === "critical" && "bg-urgency-critical shadow-[0_0_6px_rgba(225,92,79,0.65)]",
+                      u === "critical" &&
+                        "bg-urgency-critical shadow-[0_0_6px_rgba(225,92,79,0.65)]",
                       u === "urgent" && "bg-urgency-urgent",
                       u === "standard" && "bg-urgency-standard",
                       u === "flexible" && "bg-urgency-flexible",
@@ -121,13 +159,17 @@ export function JobBoard() {
 
       <FuelShockBanner />
 
+      <FleetStrip fleet={fleet} playerLocationIcao={playerLocationIcao} />
+
+      <FitLegend />
+
       <JobFilters
         roleFilter={roleFilter}
         setRoleFilter={setRoleFilter}
         classFilter={classFilter}
         setClassFilter={setClassFilter}
-        reachableOnly={reachableOnly}
-        setReachableOnly={setReachableOnly}
+        flyableOnly={flyableOnly}
+        setFlyableOnly={setFlyableOnly}
         atMyLocationOnly={atMyLocationOnly}
         setAtMyLocationOnly={setAtMyLocationOnly}
         playerLocationIcao={playerLocationIcao}
@@ -153,7 +195,13 @@ export function JobBoard() {
           }
           simNow={simNow}
           isLoading={list.isPending}
-          playerLocationIcao={playerLocationIcao}
+          recommendedJobId={recommendedJobId}
+          flyableOnly={flyableOnly}
+          onPauseRefetch={() => setInteractionPaused(true)}
+          onResumeRefetch={() => setInteractionPaused(false)}
+          onTickNow={() => tickNow.mutate()}
+          isTicking={tickNow.isPending}
+          onClearFilters={() => setFlyableOnly(false)}
         />
 
         <JobDrawer

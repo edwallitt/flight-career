@@ -12,7 +12,11 @@ const northernOutfitters: ClientDefinition = {
   seasonalMultipliers: [
     0.1, 0.2, 0.3, 0.6, 1.5, 1.8, 2.0, 2.0, 1.8, 1.5, 0.5, 0.2,
   ],
-  reputationGateMin: 0,
+  // Gated at bush rep 10 — all templates require SET class + unpaved, so
+  // surfacing these at rep 0 just clutters the board with jobs a starter
+  // pilot can't fly. The player will earn enough bush rep on Maritime Cargo
+  // runs to unlock these about the time they're shopping for a turbine.
+  reputationGateMin: 10,
   reputationGateMax: 70,
   standardTemplates: [
     {

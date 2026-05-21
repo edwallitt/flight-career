@@ -191,6 +191,7 @@ const L_OWNED_LABEL = "l-owned-label";
 // end. Replaces the older single-triangle marker.
 const L_JOB_LINE_HIT = "l-job-line-hit"; // wide invisible hit area
 const L_JOB_LINE = "l-job-line";
+const L_JOB_ARROW = "l-job-arrow"; // direction marker at line midpoint
 const L_JOB_ORIGIN = "l-job-origin";
 const L_JOB_DEST = "l-job-dest";
 const L_PLAYER_RING = "l-player-ring";
@@ -224,7 +225,9 @@ const SIZE_TIER_COLOR: Record<AtlasAirport["size"], string> = {
   remote: "#564732",
 };
 
-const STATUS_COLOR: Record<AtlasOwnedAircraft["status"], string> = {
+// Exported so the AtlasLegend can render colour keys that stay in lockstep
+// with what the map actually paints. Don't fork these — extend here.
+export const STATUS_COLOR: Record<AtlasOwnedAircraft["status"], string> = {
   available: MAP_PALETTE.accent,
   in_flight: "#5ec47c",
   in_maintenance: "#e26464",
@@ -233,7 +236,7 @@ const STATUS_COLOR: Record<AtlasOwnedAircraft["status"], string> = {
 
 // Encode role as line color so the player can scan the chart for the kind of
 // work available without reading any text.
-const ROLE_COLOR: Record<AtlasJob["role"], string> = {
+export const ROLE_COLOR: Record<AtlasJob["role"], string> = {
   bush: "#5ec47c",
   air_taxi: "#d4a574",
   light_jet: "#a78bfa",
@@ -241,7 +244,51 @@ const ROLE_COLOR: Record<AtlasJob["role"], string> = {
 };
 
 // Ferries get their own color so a quick scan separates them from client work.
-const FERRY_LINE_COLOR = "#5da9d9";
+export const FERRY_LINE_COLOR = "#5da9d9";
+
+// Fuel-price gradient endpoints. Mirrored by buildFuelPriceColorExpr; the
+// legend uses these to draw the same gradient bar with live min/max labels.
+export const FUEL_PRICE_GRADIENT = {
+  cheap: "#5ec47c",
+  mid: "#cfcfcf",
+  expensive: "#e34d4d",
+  noData: "#3a3a3a",
+} as const;
+
+// Single source of truth for how urgency drives job-line rendering. Both the
+// map's MapLibre `match` expressions and the AtlasLegend's preview ticks
+// read from this — without it the two visualisations drift apart silently
+// (which is exactly what review-work caught the first time round).
+//
+// `legendWidth` / `legendOpacity` are intentionally a hair bolder than the
+// map values: a 1.1px stroke at 0.4 opacity is barely visible inside a
+// 22×8 SVG swatch on a dark background. The boost is proportional so the
+// "critical >> flexible" ordering is preserved.
+export const URGENCY_LINE_STYLE = [
+  { urgency: "critical", mapWidth: 1.9, mapOpacity: 0.9, legendWidth: 2.4, legendOpacity: 0.9 },
+  { urgency: "urgent", mapWidth: 1.7, mapOpacity: 0.8, legendWidth: 2.0, legendOpacity: 0.8 },
+  { urgency: "standard", mapWidth: 1.4, mapOpacity: 0.6, legendWidth: 1.6, legendOpacity: 0.65 },
+  { urgency: "flexible", mapWidth: 1.1, mapOpacity: 0.4, legendWidth: 1.2, legendOpacity: 0.45 },
+] as const;
+// Fallback used when MapLibre evaluates the `match` and finds an unknown
+// urgency value. Centre of the table so the line still renders sensibly.
+const URGENCY_FALLBACK_WIDTH = 1.4;
+const URGENCY_FALLBACK_OPACITY = 0.6;
+
+// Build a MapLibre `match` expression off URGENCY_LINE_STYLE for one of the
+// numeric paint fields. Keeping this private to the module so callers can't
+// accidentally read a stale array literal.
+function urgencyMatchExpr(
+  field: "mapWidth" | "mapOpacity",
+  fallback: number,
+): unknown {
+  const expr: unknown[] = ["match", ["get", "urgency"]];
+  for (const row of URGENCY_LINE_STYLE) {
+    expr.push(row.urgency, row[field]);
+  }
+  expr.push(fallback);
+  return expr;
+}
 
 function jobLineColor(j: AtlasJob): string {
   return j.jobType === "ferry" ? FERRY_LINE_COLOR : ROLE_COLOR[j.role];
@@ -737,6 +784,7 @@ export function AtlasMap({
     set(L_OWNED_LABEL, visibleLayers.ownedAircraft);
     set(L_JOB_LINE_HIT, visibleLayers.jobs);
     set(L_JOB_LINE, visibleLayers.jobs);
+    set(L_JOB_ARROW, visibleLayers.jobs);
     set(L_JOB_ORIGIN, visibleLayers.jobs);
     set(L_JOB_DEST, visibleLayers.jobs);
     set(L_PLAYER_RING, visibleLayers.playerLocation);
@@ -798,6 +846,7 @@ export function AtlasMap({
     for (const layerId of [
       L_JOB_LINE_HIT,
       L_JOB_LINE,
+      L_JOB_ARROW,
       L_JOB_ORIGIN,
       L_JOB_DEST,
     ]) {
@@ -1211,37 +1260,77 @@ function installLayers(map: MlMap) {
         "case",
         ["boolean", ["feature-state", "hover"], false],
         2.8,
-        [
-          "match",
-          ["get", "urgency"],
-          "critical",
-          1.9,
-          "urgent",
-          1.7,
-          "standard",
-          1.4,
-          "flexible",
-          1.1,
-          1.4,
-        ],
+        urgencyMatchExpr("mapWidth", URGENCY_FALLBACK_WIDTH) as never,
       ],
       "line-opacity": [
         "case",
         ["boolean", ["feature-state", "hover"], false],
         1,
-        [
-          "match",
-          ["get", "urgency"],
-          "critical",
-          0.9,
-          "urgent",
-          0.8,
-          "standard",
-          0.6,
-          "flexible",
-          0.4,
-          0.6,
-        ],
+        urgencyMatchExpr("mapOpacity", URGENCY_FALLBACK_OPACITY) as never,
+      ],
+    },
+  });
+  // Direction arrow. A single ▶ glyph sits at the midpoint of each job
+  // line, auto-rotated along the segment so the player can read flight
+  // direction at a glance instead of having to decode "filled dot = origin,
+  // hollow ring = destination." `text-keep-upright: false` is critical:
+  // without it, MapLibre flips the glyph for any line whose tangent points
+  // leftward, which would make the arrow point at the origin for half the
+  // board. Urgency drives size + opacity the same way it drives the line so
+  // the arrow doesn't visually outweigh a low-priority job.
+  //
+  // The arrow does NOT participate in hover state — feature-state on symbol
+  // layer text properties has been historically uneven across MapLibre
+  // versions, and the hover affordance lives perfectly well on the line
+  // beneath the arrow. Keeping the expression simple here means there's
+  // nothing to silently fail at runtime.
+  map.addLayer({
+    id: L_JOB_ARROW,
+    type: "symbol",
+    source: SRC_JOBS_LINES,
+    layout: {
+      "symbol-placement": "line-center",
+      "text-field": "▶",
+      "text-font": ["Noto Sans Regular"],
+      "text-size": [
+        "match",
+        ["get", "urgency"],
+        "critical",
+        14,
+        "urgent",
+        13,
+        "standard",
+        12,
+        "flexible",
+        11,
+        12,
+      ],
+      "text-rotation-alignment": "map",
+      "text-keep-upright": false,
+      "text-allow-overlap": true,
+      "text-ignore-placement": true,
+      // Lift the glyph half an em above the line so it doesn't sit
+      // directly on the dashes, where it can read as a marker instead of
+      // an arrow. Negative Y in MapLibre's text-offset is "up".
+      "text-offset": [0, -0.6],
+    },
+    paint: {
+      "text-color": ["get", "roleColor"],
+      "text-halo-color": MAP_PALETTE.background,
+      "text-halo-width": 1.5,
+      "text-halo-blur": 0.5,
+      "text-opacity": [
+        "match",
+        ["get", "urgency"],
+        "critical",
+        0.95,
+        "urgent",
+        0.9,
+        "standard",
+        0.75,
+        "flexible",
+        0.55,
+        0.75,
       ],
     },
   });
@@ -1536,17 +1625,17 @@ function buildFuelPriceColorExpr(
   return [
     "case",
     ["==", ["get", "fuelPrice"], null],
-    "#3a3a3a",
+    FUEL_PRICE_GRADIENT.noData,
     [
       "interpolate",
       ["linear"],
       ["get", "fuelPrice"],
       lo,
-      "#5ec47c",
+      FUEL_PRICE_GRADIENT.cheap,
       mid,
-      "#cfcfcf",
+      FUEL_PRICE_GRADIENT.mid,
       hi,
-      "#e34d4d",
+      FUEL_PRICE_GRADIENT.expensive,
     ],
   ];
 }

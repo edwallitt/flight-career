@@ -36,6 +36,16 @@ function makeJob(overrides: Record<string, unknown> = {}) {
     ferryOwnerName: null,
     ferryAircraft: null,
     reachability: { status: "at_origin" },
+    // Default fit: a C172 at origin handling this contract. Tests that
+    // exercise the locked / wont_fit branches override accordingly.
+    fit: {
+      status: "ready",
+      reason: "C172 ready at origin",
+      bestAircraftTypeId: "c172",
+      bestCruiseSpeedKts: 122,
+      positioningDistanceNm: null,
+      payHourCents: 50_000,
+    },
     ...overrides,
   };
 }
@@ -48,6 +58,9 @@ function seedDefaults(
   seedQuery(["jobs", "listWithReachability"], {
     jobs,
     playerLocationIcao: "CYHZ",
+    simNow: SIM_NOW,
+    fleet: { ownedHere: [], ownedElsewhere: 0, rentalsHere: [] },
+    recommendedJobId: null,
   });
   seedQuery(["career", "get"], { simDateTime: SIM_NOW });
   // JobDrawer is always mounted; this one fires unconditionally.
@@ -95,7 +108,12 @@ describe("JobBoard — rendering", () => {
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    expect(screen.getByText(/No jobs available/i)).toBeInTheDocument();
+    // With the default "Flyable now" filter on but zero jobs, the empty
+    // state surfaces the flyable-specific message — it's the most common
+    // path for a new player.
+    expect(
+      screen.getByText(/Nothing flyable from here right now/i),
+    ).toBeInTheDocument();
   });
 
   it("renders the fuel-shock banner when a headline shock is active", () => {
@@ -148,7 +166,7 @@ describe("JobBoard — urgency tally chips", () => {
 });
 
 describe("JobBoard — filter wiring", () => {
-  it("toggling 'Reachable only' off keeps the unreachable row in view", async () => {
+  it("toggling 'Flyable now' off keeps a non-flyable row in view", async () => {
     renderWithProviders(<JobBoard />, {
       seed: (h) => {
         seedDefaults(h, [
@@ -156,19 +174,27 @@ describe("JobBoard — filter wiring", () => {
             id: 1,
             clientName: "Far Strip Co",
             reachability: { status: "unreachable" },
+            fit: {
+              status: "locked",
+              reason: "Needs SET rating",
+              bestAircraftTypeId: null,
+              bestCruiseSpeedKts: null,
+              positioningDistanceNm: null,
+              payHourCents: null,
+            },
           }),
         ]);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    // Default `reachableOnly` is true → the unreachable row is filtered out
-    // and the table shows the empty state.
+    // Default `flyableOnly` is true → the locked row is filtered out
+    // and the table shows the flyable-only empty state.
     expect(screen.queryByText("Far Strip Co")).toBeNull();
 
     // Click the toggle off; row should appear.
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: /Reachable only/i }));
+      .click(screen.getByRole("button", { name: /Flyable now/i }));
     expect(screen.getByText("Far Strip Co")).toBeInTheDocument();
   });
 

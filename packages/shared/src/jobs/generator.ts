@@ -36,6 +36,13 @@ export interface GenerationContext {
   // Used together with `playerLocationIcao` to decide whether the home-job
   // guarantee needs to fire this tick.
   homeOriginJobCount?: number;
+  // Aircraft classes the player can actually fly right now — union of owned
+  // aircraft classes and rental classes available at their current airport.
+  // When set, the open-market generator biases its class roll toward these
+  // so a starter SEP pilot doesn't see a board full of jet contracts. Pass
+  // undefined (or omit) to keep the old uniform-by-weight behaviour, which
+  // is what the seed pre-warm and unit tests do.
+  playerAvailableClasses?: AircraftClass[];
 }
 
 export interface GeneratedJob {
@@ -255,6 +262,33 @@ const OPEN_MARKET_CLASS_WEIGHTS: { value: AircraftClass; weight: number }[] = [
   { value: "JET", weight: 5 },
 ];
 
+// Multipliers applied to the base open-market class weights when
+// `playerAvailableClasses` is provided. Classes the player can fly are 2x
+// more likely; classes they can't are 0.5x. Some residual weight on
+// out-of-reach classes keeps aspirational jobs visible without flooding the
+// board. With SEP-only at start this yields ~80% SEP, ~10% MEP, ~8% SET,
+// ~2% JET — most of the top-up is flyable, but the player still sees the
+// occasional reminder that upgrades exist.
+const AVAILABLE_CLASS_MULTIPLIER = 2;
+const UNAVAILABLE_CLASS_MULTIPLIER = 0.5;
+
+function classWeightsForPlayer(
+  availableClasses: AircraftClass[] | undefined,
+): { value: AircraftClass; weight: number }[] {
+  if (!availableClasses || availableClasses.length === 0) {
+    return OPEN_MARKET_CLASS_WEIGHTS;
+  }
+  const available = new Set(availableClasses);
+  return OPEN_MARKET_CLASS_WEIGHTS.map(({ value, weight }) => ({
+    value,
+    weight:
+      weight *
+      (available.has(value)
+        ? AVAILABLE_CLASS_MULTIPLIER
+        : UNAVAILABLE_CLASS_MULTIPLIER),
+  }));
+}
+
 const OPEN_MARKET_PAYLOAD_RANGE: Record<AircraftClass, [number, number]> = {
   SEP: [100, 800],
   MEP: [200, 1500],
@@ -291,7 +325,10 @@ function buildOpenMarketJob(
 ): GeneratedJob | null {
   if (ctx.airports.length < 2) return null;
 
-  const requiredClass = weightedPick(ctx.rng, OPEN_MARKET_CLASS_WEIGHTS).value;
+  const requiredClass = weightedPick(
+    ctx.rng,
+    classWeightsForPlayer(ctx.playerAvailableClasses),
+  ).value;
 
   const isCargo = ctx.rng() < 0.8;
   const payloadType: PayloadType = isCargo ? "cargo" : "pax";

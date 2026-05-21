@@ -11,6 +11,7 @@ import {
   type AtlasLayerSet,
   type AtlasTrackedPosition,
 } from "../../components/map/AtlasMap.js";
+import { AtlasLegend } from "./AtlasLegend.js";
 import { LayerPanel } from "./LayerPanel.js";
 import { FeatureDrawer } from "./FeatureDrawer.js";
 import { JobsFilterPanel } from "./JobsFilterPanel.js";
@@ -227,6 +228,21 @@ export function Atlas() {
           {!data && (
             <div className="absolute inset-0 flex items-center justify-center font-mono text-micro uppercase tracking-callsign text-muted-dim">
               {dataQuery.isError ? "Failed to load atlas" : "Loading atlas…"}
+            </div>
+          )}
+          {/* Contextual legend. Sits above the scale bar (which lives at
+             bottom-4 left-4 inside AtlasMap) so the two don't stack
+             awkwardly. The legend handles its own collapsed/expanded state
+             and renders nothing when no layer-driven section applies. */}
+          {data && (
+            <div className="pointer-events-none absolute bottom-14 left-4 z-10">
+              <AtlasLegend
+                layers={layers}
+                fuelOverlayType={fuelOverlayType}
+                fuelOverlayRange={fuelOverlayRange}
+                hasTrackedFlight={activeTracked != null}
+                hasFerryJobs={data.jobs.some((j) => j.jobType === "ferry")}
+              />
             </div>
           )}
         </div>

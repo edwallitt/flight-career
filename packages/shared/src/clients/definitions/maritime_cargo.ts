@@ -7,7 +7,7 @@ const maritimeCargo: ClientDefinition = {
   homeBaseIcao: "CYHZ",
   description:
     "Routine small-parcel cargo distributor connecting Halifax to Maritime communities.",
-  baseJobsPerDay: 3,
+  baseJobsPerDay: 4,
   seasonalMultipliers: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   reputationGateMin: 0,
   reputationGateMax: 50,
@@ -37,7 +37,9 @@ const maritimeCargo: ClientDefinition = {
     {
       weight: 1,
       payloadType: "cargo",
-      payloadLbsRange: [300, 1200],
+      // Capped at 750 lbs so a starter C172 (880 lb max payload) always fits
+      // with reserves. The premium MEP template carries the heavier loads.
+      payloadLbsRange: [300, 750],
       minClass: "SEP",
       requiredCapabilities: [],
       urgency: "standard",
