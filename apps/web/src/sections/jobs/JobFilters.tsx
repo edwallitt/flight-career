@@ -22,8 +22,8 @@ export function JobFilters({
   setRoleFilter,
   classFilter,
   setClassFilter,
-  reachableOnly,
-  setReachableOnly,
+  flyableOnly,
+  setFlyableOnly,
   atMyLocationOnly,
   setAtMyLocationOnly,
   playerLocationIcao,
@@ -37,8 +37,8 @@ export function JobFilters({
   setRoleFilter: (r: RoleFilter) => void;
   classFilter: ClassFilter;
   setClassFilter: (c: ClassFilter) => void;
-  reachableOnly: boolean;
-  setReachableOnly: (v: boolean) => void;
+  flyableOnly: boolean;
+  setFlyableOnly: (v: boolean) => void;
   atMyLocationOnly: boolean;
   setAtMyLocationOnly: (v: boolean) => void;
   playerLocationIcao: string;
@@ -109,29 +109,33 @@ export function JobFilters({
         </div>
       </div>
 
-      {/* Reachability toggle */}
+      {/* Flyable-now toggle: filters to jobs that pass the full eligibility
+         check (payload, range, capability) against an aircraft the player
+         can dispatch right now — owned anywhere they can reach or rental
+         at their current airport. Stricter than the old "reachable only". */}
       <div className="flex flex-col gap-1.5">
-        <span className="label">Reach</span>
+        <span className="label">Fit</span>
         <button
           type="button"
-          onClick={() => setReachableOnly(!reachableOnly)}
+          onClick={() => setFlyableOnly(!flyableOnly)}
           className={[
             "relative inline-flex items-center gap-2 rounded-sm border px-3 py-1.5 font-mono text-[11px] uppercase tracking-callsign transition-colors",
-            reachableOnly
+            flyableOnly
               ? "border-amber-deep bg-amber-glow/[0.08] text-amber-glow hover:bg-amber-glow/[0.14]"
               : "border-ink-600 bg-ink-750 text-muted-dim hover:text-text",
           ].join(" ")}
-          aria-pressed={reachableOnly}
+          aria-pressed={flyableOnly}
+          title="Show only jobs that an aircraft you can dispatch right now would actually fit (payload, range, capability)."
         >
           <span
             className={[
               "h-1.5 w-1.5 rounded-full",
-              reachableOnly
+              flyableOnly
                 ? "bg-amber-glow shadow-[0_0_6px_rgba(212,165,116,0.6)]"
                 : "bg-ink-500",
             ].join(" ")}
           />
-          Reachable only
+          Flyable now
         </button>
       </div>
 

@@ -1,15 +1,21 @@
 import {
   ALL_CLIENTS,
+  computeJobFit,
   computeReachability,
   generateFerryJob,
   getClientById,
   haversineNm,
+  pickRecommendedJobId,
   runGenerationTick,
   type AircraftClass,
   type FerryAircraftType,
   type FerryAirportLite,
+  type FitAirport,
+  type FitOwnedAircraft,
+  type FitRentalAircraft,
   type GeneratedFerry,
   type GeneratedJob,
+  type JobFit,
   type JobReachability,
   type Role,
 } from "@flightcareer/shared";
@@ -572,11 +578,39 @@ export function getOpenJobs(): JobListItem[] {
 
 export interface JobListItemWithReachability extends JobListItem {
   reachability: JobReachability;
+  // Per-row fit summary used by the job board to render the compatibility
+  // glyph + tooltip + pay/hour column without the player having to open the
+  // drawer. Ferries are reported as "locked" when the player lacks the
+  // class rating, "ready" when at the origin, and "reposition" otherwise —
+  // the dispatched aircraft is supplied so payload/range checks don't apply.
+  fit: JobFit;
+}
+
+export interface FleetReadoutAircraft {
+  aircraftTypeId: string;
+  manufacturer: string;
+  model: string;
+  cls: AircraftClass;
+  maxPayloadLbs: number;
+  rangeNm: number;
+  cruiseSpeedKts: number;
+}
+
+export interface FleetReadout {
+  ownedHere: Array<FleetReadoutAircraft & { tailNumber: string }>;
+  ownedElsewhere: number;
+  rentalsHere: Array<FleetReadoutAircraft & { rentalRatePerHour: number }>;
 }
 
 export interface JobBoardWithReachability {
   jobs: JobListItemWithReachability[];
   playerLocationIcao: string;
+  simNow: number;
+  fleet: FleetReadout;
+  // The single "best for you" job. The web app highlights this row. null
+  // when nothing scores well (e.g. board empty, or everything is locked /
+  // expiring soon / weather-strict).
+  recommendedJobId: number | null;
 }
 
 export function getOpenJobsWithReachability(): JobBoardWithReachability {
@@ -584,13 +618,29 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
 
   const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
   if (!careerRow) {
+    const emptyFit: JobFit = {
+      status: "locked",
+      reason: "No career",
+      bestAircraftTypeId: null,
+      bestCruiseSpeedKts: null,
+      positioningDistanceNm: null,
+      payHourCents: null,
+    };
     return {
-      jobs: items.map((j) => ({ ...j, reachability: { status: "unreachable" } })),
+      jobs: items.map((j) => ({
+        ...j,
+        reachability: { status: "unreachable" },
+        fit: emptyFit,
+      })),
       playerLocationIcao: "",
+      simNow: Date.now(),
+      fleet: { ownedHere: [], ownedElsewhere: 0, rentalsHere: [] },
+      recommendedJobId: null,
     };
   }
 
   const playerLocationIcao = careerRow.currentLocationIcao;
+  const simNow = careerRow.simDateTime;
 
   const ratingRows = db.select().from(ratings).all();
   const playerRatings: Record<AircraftClass, boolean> = {
@@ -609,6 +659,8 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
     .where(ne(ownedAircraft.status, "sold"))
     .all();
+  // Reachability context (range-only). Kept separate so the existing drawer
+  // contract doesn't change shape.
   const ownedAircraftCtx = ownedRows.map(({ owned, type }) => ({
     aircraftTypeId: type.id,
     currentLocationIcao: owned.currentLocationIcao,
@@ -616,6 +668,19 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     rangeNm: type.rangeNm,
     isAvailable: owned.status === "available",
   }));
+  // Fit context — richer, includes payload, cruise, and unpaved capability.
+  const ownedAircraftFit: FitOwnedAircraft[] = ownedRows.map(
+    ({ owned, type }) => ({
+      aircraftTypeId: type.id,
+      currentLocationIcao: owned.currentLocationIcao,
+      cls: type.class,
+      rangeNm: type.rangeNm,
+      cruiseSpeedKts: type.cruiseSpeedKts,
+      maxPayloadLbs: type.maxPayloadLbs,
+      unpavedCapable: type.unpavedCapable,
+      isAvailable: owned.status === "available",
+    }),
+  );
 
   const rentalRows = db
     .select({ rental: rentalFleet, type: aircraftTypes })
@@ -628,10 +693,26 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     cls: type.class,
     rangeNm: type.rangeNm,
   }));
+  const rentalsFit: FitRentalAircraft[] = rentalRows.map(({ type }) => ({
+    aircraftTypeId: type.id,
+    cls: type.class,
+    rangeNm: type.rangeNm,
+    cruiseSpeedKts: type.cruiseSpeedKts,
+    maxPayloadLbs: type.maxPayloadLbs,
+    unpavedCapable: type.unpavedCapable,
+  }));
 
   const airportRows = db.select().from(airports).all();
+  // Reachability uses lat/lon only; fit also needs the paved-runway flag so
+  // it can require unpaved-capable aircraft for jobs that touch a dirt strip.
   const airportMap = new Map<string, { lat: number; lon: number }>(
     airportRows.map((a) => [a.icao, { lat: a.lat, lon: a.lon }]),
+  );
+  const fitAirportMap = new Map<string, FitAirport>(
+    airportRows.map((a) => [
+      a.icao,
+      { lat: a.lat, lon: a.lon, hasPavedRunway: a.hasPavedRunway },
+    ]),
   );
 
   const enriched = items.map<JobListItemWithReachability>((job) => {
@@ -639,46 +720,152 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     // the contract aircraft is provided. Reachability collapses to a
     // commercial-travel question: are you at the origin or not?
     if (job.jobType === "ferry") {
-      if (!playerRatings[job.requiredClass]) {
-        return { ...job, reachability: { status: "unreachable" } };
+      const hasRating = playerRatings[job.requiredClass];
+      if (!hasRating) {
+        return {
+          ...job,
+          reachability: { status: "unreachable" },
+          fit: {
+            status: "locked",
+            reason: `Needs ${job.requiredClass} rating`,
+            bestAircraftTypeId: job.ferryAircraft?.aircraftTypeId ?? null,
+            bestCruiseSpeedKts: job.ferryAircraft?.cruiseSpeedKts ?? null,
+            positioningDistanceNm: null,
+            payHourCents: null,
+          },
+        };
       }
+      const cruise = job.ferryAircraft?.cruiseSpeedKts ?? 0;
+      const flightHrs = cruise > 0 ? job.distanceNm / cruise : 0;
       if (job.originIcao === playerLocationIcao) {
-        return { ...job, reachability: { status: "at_origin" } };
+        return {
+          ...job,
+          reachability: { status: "at_origin" },
+          fit: {
+            status: "ready",
+            reason: "Ferry aircraft at origin",
+            bestAircraftTypeId: job.ferryAircraft?.aircraftTypeId ?? null,
+            bestCruiseSpeedKts: cruise || null,
+            positioningDistanceNm: null,
+            payHourCents:
+              cruise > 0
+                ? Math.round(job.pay / Math.max(0.1, flightHrs))
+                : null,
+          },
+        };
       }
       const ap1 = airportMap.get(playerLocationIcao);
       const ap2 = airportMap.get(job.originIcao);
       const distance =
-        ap1 && ap2
-          ? Math.round(haversineNm(ap1, ap2))
-          : undefined;
+        ap1 && ap2 ? Math.round(haversineNm(ap1, ap2)) : undefined;
+      // Ferries do not use the player's rentals for positioning — the
+      // player buys a commercial ticket to the origin. So pay/hour for a
+      // ferry leg is just the flight time, not flight + positioning.
       return {
         ...job,
         reachability: {
           status: "reposition_rental",
           ...(distance != null ? { positioningDistanceNm: distance } : {}),
         },
+        fit: {
+          status: "reposition",
+          reason:
+            distance != null ? `Travel ${distance} nm to origin` : "Travel to origin",
+          bestAircraftTypeId: job.ferryAircraft?.aircraftTypeId ?? null,
+          bestCruiseSpeedKts: cruise || null,
+          positioningDistanceNm: distance ?? null,
+          payHourCents:
+            cruise > 0
+              ? Math.round(job.pay / Math.max(0.1, flightHrs))
+              : null,
+        },
       };
     }
-    return {
-      ...job,
-      reachability: computeReachability(
-        {
-          originIcao: job.originIcao,
-          requiredClass: job.requiredClass,
-          requiredCapabilities: job.requiredCapabilities,
-        },
-        {
-          playerLocationIcao,
-          playerRatings,
-          ownedAircraft: ownedAircraftCtx,
-          rentalsAtPlayerLocation,
-          airports: airportMap,
-        },
-      ),
-    };
+
+    const reachability = computeReachability(
+      {
+        originIcao: job.originIcao,
+        requiredClass: job.requiredClass,
+        requiredCapabilities: job.requiredCapabilities,
+      },
+      {
+        playerLocationIcao,
+        playerRatings,
+        ownedAircraft: ownedAircraftCtx,
+        rentalsAtPlayerLocation,
+        airports: airportMap,
+      },
+    );
+
+    const fit = computeJobFit(
+      {
+        originIcao: job.originIcao,
+        destinationIcao: job.destinationIcao,
+        distanceNm: job.distanceNm,
+        payloadLbs: job.payloadLbs,
+        requiredClass: job.requiredClass,
+        requiredCapabilities: job.requiredCapabilities,
+        pay: job.pay,
+      },
+      {
+        playerLocationIcao,
+        playerRatings,
+        ownedAircraft: ownedAircraftFit,
+        rentalsAtPlayerLocation: rentalsFit,
+        airports: fitAirportMap,
+      },
+    );
+
+    return { ...job, reachability, fit };
   });
 
-  return { jobs: enriched, playerLocationIcao };
+  // Fleet readout: what the player can fly *right now*, surfaced in the
+  // strip above the filters so they don't have to remember payload/range
+  // numbers while scanning the board.
+  const ownedHere = ownedRows
+    .filter(({ owned }) => owned.currentLocationIcao === playerLocationIcao)
+    .map(({ owned, type }) => ({
+      aircraftTypeId: type.id,
+      manufacturer: type.manufacturer,
+      model: type.model,
+      cls: type.class,
+      maxPayloadLbs: type.maxPayloadLbs,
+      rangeNm: type.rangeNm,
+      cruiseSpeedKts: type.cruiseSpeedKts,
+      tailNumber: owned.tailNumber,
+    }));
+  const ownedElsewhere = ownedRows.filter(
+    ({ owned }) => owned.currentLocationIcao !== playerLocationIcao,
+  ).length;
+  const rentalsHere = rentalRows.map(({ type }) => ({
+    aircraftTypeId: type.id,
+    manufacturer: type.manufacturer,
+    model: type.model,
+    cls: type.class,
+    maxPayloadLbs: type.maxPayloadLbs,
+    rangeNm: type.rangeNm,
+    cruiseSpeedKts: type.cruiseSpeedKts,
+    rentalRatePerHour: type.rentalRatePerHour,
+  }));
+
+  const recommendedJobId = pickRecommendedJobId(
+    enriched.map((j) => ({
+      id: j.id,
+      originIcao: j.originIcao,
+      fit: j.fit,
+      expiresAt: j.expiresAt,
+      weatherSensitivity: j.weatherSensitivity,
+    })),
+    { playerLocationIcao, simNow },
+  );
+
+  return {
+    jobs: enriched,
+    playerLocationIcao,
+    simNow,
+    fleet: { ownedHere, ownedElsewhere, rentalsHere },
+    recommendedJobId,
+  };
 }
 
 export interface JobDetail extends JobListItem {

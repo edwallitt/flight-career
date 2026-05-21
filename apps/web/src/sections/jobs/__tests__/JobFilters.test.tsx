@@ -9,8 +9,8 @@ function renderFilters(overrides: Partial<React.ComponentProps<typeof JobFilters
     setRoleFilter: vi.fn(),
     classFilter: "any",
     setClassFilter: vi.fn(),
-    reachableOnly: false,
-    setReachableOnly: vi.fn(),
+    flyableOnly: false,
+    setFlyableOnly: vi.fn(),
     atMyLocationOnly: false,
     setAtMyLocationOnly: vi.fn(),
     playerLocationIcao: "CYHZ",
@@ -54,20 +54,20 @@ describe("JobFilters — role + class chips", () => {
   });
 });
 
-describe("JobFilters — reachable + at-my-location toggles", () => {
-  it("toggles reachableOnly via aria-pressed and click", async () => {
-    const setReachableOnly = vi.fn();
-    renderFilters({ reachableOnly: false, setReachableOnly });
-    const btn = screen.getByRole("button", { name: /Reachable only/i });
+describe("JobFilters — flyable + at-my-location toggles", () => {
+  it("toggles flyableOnly via aria-pressed and click", async () => {
+    const setFlyableOnly = vi.fn();
+    renderFilters({ flyableOnly: false, setFlyableOnly });
+    const btn = screen.getByRole("button", { name: /Flyable now/i });
     expect(btn).toHaveAttribute("aria-pressed", "false");
     await userEvent.setup().click(btn);
-    expect(setReachableOnly).toHaveBeenCalledWith(true);
+    expect(setFlyableOnly).toHaveBeenCalledWith(true);
   });
 
-  it("renders aria-pressed=true when reachableOnly is enabled", () => {
-    renderFilters({ reachableOnly: true });
+  it("renders aria-pressed=true when flyableOnly is enabled", () => {
+    renderFilters({ flyableOnly: true });
     expect(
-      screen.getByRole("button", { name: /Reachable only/i }),
+      screen.getByRole("button", { name: /Flyable now/i }),
     ).toHaveAttribute("aria-pressed", "true");
   });
 

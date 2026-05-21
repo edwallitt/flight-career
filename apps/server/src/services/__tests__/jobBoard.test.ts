@@ -5,6 +5,7 @@ import { career, jobs } from "../../db/schema.js";
 import {
   getCareer,
   insertJob,
+  insertOwnedAircraft,
   resetTestDb,
 } from "../../__tests__/helpers/fixtures.js";
 import {
@@ -142,6 +143,59 @@ describe("getOpenJobsWithReachability", () => {
     const enriched = getOpenJobsWithReachability();
     // CYHZ → CYQM is ~140 nm, well within a Bonanza G36's range.
     expect(enriched.jobs[0]!.reachability.status).toBe("reposition_rental");
+  });
+
+  it("attaches a 'ready' fit + non-null recommendedJobId when an owned C172 fits", () => {
+    insertOwnedAircraft({ aircraftTypeId: "c172", currentLocationIcao: "CYHZ" });
+    insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      payloadLbs: 140,
+      pay: 64_000,
+    });
+    const result = getOpenJobsWithReachability();
+    expect(result.jobs[0]!.fit.status).toBe("ready");
+    expect(result.jobs[0]!.fit.payHourCents).toBeGreaterThan(0);
+    expect(result.recommendedJobId).toBe(result.jobs[0]!.id);
+    expect(result.fleet.ownedHere.some((a) => a.aircraftTypeId === "c172")).toBe(
+      true,
+    );
+  });
+
+  it("flags wont_fit when payload exceeds every available aircraft", () => {
+    // Default fixture has a Bonanza G36 rental (1100 lb) at CYHZ. A 2000 lb
+    // payload overruns both that and any owned starter, so the fit pass
+    // demotes the row to wont_fit and recommendedJobId stays null.
+    insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      payloadLbs: 2000,
+      requiredClass: "SEP",
+    });
+    const result = getOpenJobsWithReachability();
+    expect(result.jobs[0]!.fit.status).toBe("wont_fit");
+    expect(result.recommendedJobId).toBeNull();
+  });
+
+  it("flags locked when the player has no rating for the required class", () => {
+    // Default fixture only seeds the SEP rating. A SET-class job is locked.
+    insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      requiredClass: "SET",
+    });
+    const result = getOpenJobsWithReachability();
+    expect(result.jobs[0]!.fit.status).toBe("locked");
+    expect(result.jobs[0]!.fit.reason).toMatch(/SET/);
+  });
+
+  it("includes simNow + fleet summary alongside the jobs array", () => {
+    insertOwnedAircraft({ aircraftTypeId: "c172", currentLocationIcao: "CYHZ" });
+    const result = getOpenJobsWithReachability();
+    expect(typeof result.simNow).toBe("number");
+    expect(result.fleet.ownedHere.length).toBeGreaterThan(0);
+    // The default rental fixture parks a Bonanza G36 at CYHZ.
+    expect(result.fleet.rentalsHere.some((r) => r.cls === "SEP")).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { JobTable } from "../JobTable.js";
@@ -33,6 +33,14 @@ function makeJob(overrides: Partial<JobRow> = {}): JobRow {
     ferryOwnerName: null,
     ferryAircraft: null,
     reachability: { status: "at_origin" },
+    fit: {
+      status: "ready",
+      reason: "C172 ready at origin",
+      bestAircraftTypeId: "c172",
+      bestCruiseSpeedKts: 122,
+      positioningDistanceNm: null,
+      payHourCents: 50_000,
+    },
   };
   return { ...base, ...overrides } as JobRow;
 }
@@ -49,7 +57,13 @@ function renderTable(
     onSelect: vi.fn(),
     simNow: SIM_NOW,
     isLoading: false,
-    playerLocationIcao: "CYHZ",
+    recommendedJobId: null,
+    flyableOnly: false,
+    onPauseRefetch: vi.fn(),
+    onResumeRefetch: vi.fn(),
+    onTickNow: vi.fn(),
+    isTicking: false,
+    onClearFilters: vi.fn(),
     ...overrides,
   };
   render(<JobTable {...props} />);
@@ -61,6 +75,13 @@ describe("JobTable — empty + rendering", () => {
     renderTable([]);
     expect(screen.getByText(/No jobs available/i)).toBeInTheDocument();
     expect(screen.getByText(/board · empty/i)).toBeInTheDocument();
+  });
+
+  it("renders the flyable-only empty message when no jobs survive that filter", () => {
+    renderTable([], { flyableOnly: true });
+    expect(
+      screen.getByText(/Nothing flyable from here right now/i),
+    ).toBeInTheDocument();
   });
 
   it("does not render the empty state while loading even if jobs is empty", () => {
@@ -90,8 +111,11 @@ describe("JobTable — sorting", () => {
       ],
       { sort: { key: "pay", dir: "asc" } },
     );
-    const payCells = screen.getAllByText(/^\$\d+$/);
-    // First three pay cells correspond to the three rows in sorted order.
+    // The Pay column renders bare dollar strings — the $/hr column adds
+    // "/hr". Use a regex that excludes the per-hour values.
+    const payCells = screen
+      .getAllByText(/^\$\d+$/)
+      .filter((n) => !n.textContent?.includes("/hr"));
     expect(payCells.slice(0, 3).map((n) => n.textContent)).toEqual([
       "$200",
       "$500",
@@ -131,7 +155,7 @@ describe("JobTable — sorting", () => {
   });
 });
 
-describe("JobTable — selection + reachability", () => {
+describe("JobTable — selection + fit", () => {
   it("invokes onSelect with the clicked job", async () => {
     const onSelect = vi.fn();
     const job = makeJob({ id: 42, clientName: "Atlantic Forestry" });
@@ -143,8 +167,6 @@ describe("JobTable — selection + reachability", () => {
 
   it("renders Open Market label when role=open and clientName is null", () => {
     renderTable([makeJob({ role: "open", clientName: null })]);
-    // Both the client cell ("Open Market") and the role tag are rendered;
-    // the tag is uppercased via tracking-callsign, so we match case-insensitively.
     expect(screen.getAllByText(/Open Market/i).length).toBeGreaterThan(0);
   });
 
@@ -174,31 +196,74 @@ describe("JobTable — selection + reachability", () => {
     expect(screen.getByText(/Beechcraft Bonanza G36/)).toBeInTheDocument();
   });
 
-  it("dims the row when the job is unreachable", () => {
+  it("dims locked rows and surfaces the fit reason as a caption", () => {
     renderTable([
       makeJob({
         id: 1,
-        clientName: "Far Away Co.",
-        reachability: { status: "unreachable" },
-      }),
-    ]);
-    const row = screen.getByText("Far Away Co.").closest("button")!;
-    expect(row.className).toMatch(/opacity-50/);
-  });
-
-  it("annotates the reachability dot with a tooltip for repositioning jobs", () => {
-    renderTable([
-      makeJob({
-        clientName: "Reposition Co.",
-        originIcao: "CYQM",
-        reachability: {
-          status: "reposition_rental",
-          positioningDistanceNm: 87,
+        clientName: "Locked Client",
+        fit: {
+          status: "locked",
+          reason: "Needs SET rating",
+          bestAircraftTypeId: null,
+          bestCruiseSpeedKts: null,
+          positioningDistanceNm: null,
+          payHourCents: null,
         },
       }),
     ]);
-    const row = screen.getByText("Reposition Co.").closest("button")!;
-    const dot = within(row).getByLabelText(/Reposition required: 87nm from CYHZ/);
-    expect(dot).toBeInTheDocument();
+    const row = screen.getByText("Locked Client").closest("button")!;
+    expect(row.className).toMatch(/opacity-55/);
+    expect(screen.getByText(/Needs SET rating/i)).toBeInTheDocument();
+  });
+
+  it("highlights the recommended job with a 'best' badge", () => {
+    renderTable(
+      [
+        makeJob({ id: 1, clientName: "Other Client" }),
+        makeJob({ id: 2, clientName: "Recommended Client" }),
+      ],
+      { recommendedJobId: 2 },
+    );
+    expect(screen.getByText(/best/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("Recommended Client").closest("button")!.className,
+    ).toMatch(/bg-amber-glow/);
+  });
+
+  it("renders pay/hr from fit.payHourCents", () => {
+    renderTable([
+      makeJob({
+        id: 1,
+        clientName: "Hourly",
+        fit: {
+          status: "ready",
+          reason: "ok",
+          bestAircraftTypeId: "c172",
+          bestCruiseSpeedKts: 122,
+          positioningDistanceNm: null,
+          payHourCents: 123_400,
+        },
+      }),
+    ]);
+    expect(screen.getByText("$1,234")).toBeInTheDocument();
+  });
+});
+
+describe("JobTable — refetch pause hooks", () => {
+  it("calls onPauseRefetch/onResumeRefetch on mouse enter/leave", async () => {
+    const onPauseRefetch = vi.fn();
+    const onResumeRefetch = vi.fn();
+    renderTable([makeJob()], { onPauseRefetch, onResumeRefetch });
+    const region = screen.getByText("Maritime Cargo Express").closest("div")!
+      .parentElement!.parentElement!;
+    // Walk up to the table container that owns the hover handlers.
+    // Easier: trigger directly via the row's button parent chain.
+    const user = userEvent.setup();
+    await user.hover(region);
+    await user.unhover(region);
+    // We don't assert exact call counts (RTL may bubble multiple events);
+    // just that both fired at least once.
+    expect(onPauseRefetch).toHaveBeenCalled();
+    expect(onResumeRefetch).toHaveBeenCalled();
   });
 });
