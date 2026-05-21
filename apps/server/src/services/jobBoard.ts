@@ -117,6 +117,32 @@ function homeOriginJobCount(playerLocationIcao: string): number {
   return row?.n ?? 0;
 }
 
+// Classes the player can actually fly right now: any aircraft they own that
+// isn't sold, plus any rental sitting at their current airport. The generator
+// uses this to bias the open-market class roll. Returns undefined when the
+// player has zero options anywhere, which falls back to the default uniform
+// weights — better than producing an empty board.
+function loadPlayerAvailableClasses(
+  playerLocationIcao: string,
+): AircraftClass[] | undefined {
+  const ownedRows = db
+    .select({ cls: aircraftTypes.class })
+    .from(ownedAircraft)
+    .innerJoin(aircraftTypes, eq(ownedAircraft.aircraftTypeId, aircraftTypes.id))
+    .where(ne(ownedAircraft.status, "sold"))
+    .all();
+  const rentalRows = db
+    .select({ cls: aircraftTypes.class })
+    .from(rentalFleet)
+    .innerJoin(aircraftTypes, eq(rentalFleet.aircraftTypeId, aircraftTypes.id))
+    .where(eq(rentalFleet.airportIcao, playerLocationIcao))
+    .all();
+  const set = new Set<AircraftClass>();
+  for (const r of ownedRows) set.add(r.cls);
+  for (const r of rentalRows) set.add(r.cls);
+  return set.size > 0 ? [...set] : undefined;
+}
+
 function expireStaleJobs(simNow: number): number {
   const result = db
     .update(jobs)
@@ -368,6 +394,7 @@ export function tickJobGeneration(): TickResult {
   const playerLocationIcao = careerRow.currentLocationIcao;
   const rng = rngFromCryptoSeed();
   const reputationMaps = loadReputation();
+  const playerAvailableClasses = loadPlayerAvailableClasses(playerLocationIcao);
   const generated = runGenerationTick(ALL_CLIENTS, {
     airports: airportsLite,
     reputationByRole: reputationMaps.byRole,
@@ -378,6 +405,7 @@ export function tickJobGeneration(): TickResult {
     targetBoardSize: TARGET_BOARD_SIZE,
     playerLocationIcao,
     homeOriginJobCount: homeOriginJobCount(playerLocationIcao),
+    playerAvailableClasses,
   });
 
   insertGenerated(generated);

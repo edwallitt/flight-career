@@ -14,11 +14,14 @@ const eastCoastTours: ClientDefinition = {
   reputationGateMin: 0,
   reputationGateMax: 50,
   standardTemplates: [
+    // Light scenic tour — fits a starter SEP like the C172 (3 pax + small bags
+    // ≈ 600 lbs total). Weighted higher so low-rep players consistently see a
+    // tour they can actually fly.
     {
-      weight: 1,
+      weight: 2,
       payloadType: "pax",
-      payloadLbsRange: [600, 1200],
-      paxCountRange: [3, 6],
+      payloadLbsRange: [350, 650],
+      paxCountRange: [2, 3],
       minClass: "SEP",
       requiredCapabilities: [],
       urgency: "flexible",
@@ -29,7 +32,26 @@ const eastCoastTours: ClientDefinition = {
         destinationCandidates: ["CYHZ", "CYQI", "CYYG", "CYAW"],
       },
       description: ({ origin, destination }) =>
-        `Scenic sightseeing flight from ${origin} with a turn over ${destination}.`,
+        `Small-group scenic flight from ${origin} with a turn over ${destination}.`,
+    },
+    // Extended tour — larger group, needs an MEP-class twin like the Seneca
+    // or a six-seat SET. Gives the player a visible upgrade target.
+    {
+      weight: 1,
+      payloadType: "pax",
+      payloadLbsRange: [800, 1200],
+      paxCountRange: [4, 6],
+      minClass: "MEP",
+      requiredCapabilities: [],
+      urgency: "flexible",
+      weatherSensitivity: "strict",
+      basePayMultiplier: 1.0,
+      routeTemplate: {
+        originCandidates: ["CYHZ", "CYQI", "CYYG"],
+        destinationCandidates: ["CYHZ", "CYQI", "CYYG", "CYAW"],
+      },
+      description: ({ origin, destination }) =>
+        `Extended scenic charter from ${origin} with a turn over ${destination} — full lounge of guests.`,
     },
   ],
   premiumTemplates: [],
