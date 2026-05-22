@@ -45,6 +45,16 @@ export interface AtlasOwnedAircraft {
   engineHoursSinceOverhaul: number;
   tboHours: number;
   fuelType: "avgas" | "jet-a";
+  // Catalog values pulled through so the Atlas can draw range rings and
+  // estimate block time without a second round-trip to the aircraft router.
+  rangeNm: number;
+  cruiseSpeedKts: number;
+  // Usable fuel capacity in US gallons. Atlas uses this for the "cost to
+  // fill" affordance in the airport drawer when this aircraft is the
+  // current range-anchor — multiply by the airport's per-gallon price for
+  // a real-money line. Zero means the catalog hasn't backfilled this
+  // aircraft yet; UI should render "—".
+  fuelCapacityGal: number;
 }
 
 export interface AtlasRecentFlight {
@@ -174,6 +184,9 @@ export function getAtlasData(): AtlasData {
     engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
     tboHours: type.tboHours,
     fuelType: type.fuelType,
+    rangeNm: type.rangeNm,
+    cruiseSpeedKts: type.cruiseSpeedKts,
+    fuelCapacityGal: type.fuelCapacityGal,
   }));
 
   const flightCutoff = simNow - RECENT_FLIGHT_WINDOW_MS;

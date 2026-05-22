@@ -12,6 +12,9 @@ const ALL_OFF: AtlasLayerSet = {
   jobs: false,
   playerLocation: false,
   trackedFlight: false,
+  rangeRings: false,
+  reachabilityDim: false,
+  nightShade: false,
 };
 
 const ALL_PRESET: AtlasLayerSet = {
@@ -22,6 +25,9 @@ const ALL_PRESET: AtlasLayerSet = {
   jobs: true,
   playerLocation: true,
   trackedFlight: true,
+  rangeRings: true,
+  reachabilityDim: true,
+  nightShade: true,
 };
 
 const DEFAULT_COUNTS = {
