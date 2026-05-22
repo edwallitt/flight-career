@@ -18,6 +18,15 @@ interface LayerPanelProps {
   // True only while an in_progress MSFS-tracked flight exists. The Live Track
   // row + preset chip are hidden otherwise to keep the panel quiet.
   hasTrackedFlight?: boolean;
+  // When non-null, the range rings drive off this aircraft. We surface its
+  // tail + range in a small footnote so the player understands *why* a given
+  // airport is dimmed (or not). Null suppresses both the rings and the
+  // explanatory copy.
+  rangeAnchor?: {
+    rangeNm: number;
+    tailNumber: string;
+    aircraftTypeLabel: string;
+  } | null;
 }
 
 function formatPriceCents(cents: number): string {
@@ -48,6 +57,9 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       jobs: true,
       playerLocation: true,
       trackedFlight: true,
+      rangeRings: true,
+      reachabilityDim: true,
+      nightShade: true,
     },
   },
   {
@@ -61,6 +73,9 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       jobs: false,
       playerLocation: true,
       trackedFlight: true,
+      rangeRings: true,
+      reachabilityDim: true,
+      nightShade: true,
     },
   },
   {
@@ -74,6 +89,9 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       jobs: false,
       playerLocation: true,
       trackedFlight: true,
+      rangeRings: true,
+      reachabilityDim: true,
+      nightShade: true,
     },
   },
   {
@@ -87,6 +105,9 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       jobs: true,
       playerLocation: true,
       trackedFlight: true,
+      rangeRings: true,
+      reachabilityDim: true,
+      nightShade: true,
     },
   },
   {
@@ -100,6 +121,15 @@ const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
       jobs: false,
       playerLocation: true,
       trackedFlight: true,
+      // Fuel inspection is the one preset that intentionally drops the dim:
+      // the player wants a clean look at every airport's price, regardless
+      // of whether they can fly there from current position.
+      rangeRings: false,
+      reachabilityDim: false,
+      // Fuel mode keeps night shade off so the gradient reads cleanly
+      // across all longitudes — the price-color encoding is the headline
+      // here and shouldn't compete with a dim overlay.
+      nightShade: false,
     },
   },
 ];
@@ -112,7 +142,10 @@ function shallowEq(a: AtlasLayerSet, b: AtlasLayerSet): boolean {
     a.recentFlights === b.recentFlights &&
     a.jobs === b.jobs &&
     a.playerLocation === b.playerLocation &&
-    a.trackedFlight === b.trackedFlight
+    a.trackedFlight === b.trackedFlight &&
+    a.rangeRings === b.rangeRings &&
+    a.reachabilityDim === b.reachabilityDim &&
+    a.nightShade === b.nightShade
   );
 }
 
@@ -221,6 +254,7 @@ export function LayerPanel({
   fuelOverlayType,
   fuelOverlayRange,
   hasTrackedFlight = false,
+  rangeAnchor = null,
 }: LayerPanelProps) {
   const toggle = (key: keyof AtlasLayerSet) =>
     onChange({ ...layers, [key]: !layers[key] });
@@ -268,6 +302,38 @@ export function LayerPanel({
       count: counts.player,
       swatch: (
         <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(94,196,124,0.7)]" />
+      ),
+    },
+    {
+      key: "rangeRings",
+      label: "Range rings",
+      swatch: (
+        // Two concentric arcs — same idiom the map uses.
+        <span className="relative block h-3 w-3">
+          <span className="absolute inset-0 rounded-full border border-amber-deep/80" />
+          <span className="absolute inset-[3px] rounded-full border border-dashed border-amber-deep/60" />
+        </span>
+      ),
+    },
+    {
+      key: "reachabilityDim",
+      label: "Dim out of range",
+      swatch: (
+        <span className="flex h-3 w-3 items-center justify-center gap-px">
+          <span className="h-2 w-1 rounded-sm bg-amber-glow" />
+          <span className="h-2 w-1 rounded-sm bg-amber-glow/20" />
+        </span>
+      ),
+    },
+    {
+      key: "nightShade",
+      label: "Night shade",
+      // Half-light, half-dark swatch — reads instantly as "day/night."
+      swatch: (
+        <span className="flex h-3 w-3 overflow-hidden rounded-full border border-amber-deep/60">
+          <span className="h-full w-1/2 bg-amber-glow/40" />
+          <span className="h-full w-1/2 bg-[#0b1a2a]" />
+        </span>
       ),
     },
   ];
@@ -339,6 +405,37 @@ export function LayerPanel({
           )}
           <div className="mt-2 font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
             Showing {fuelOverlayType === "jet-a" ? "Jet A" : "Avgas"} prices
+          </div>
+        </div>
+      )}
+
+      {/* Range anchor footnote. Only renders when the player has an eligible
+          aircraft sitting at their current airport — otherwise the rings
+          would be a phantom UI. */}
+      {layers.rangeRings && rangeAnchor && (
+        <div className="border-t border-ink-600/70 px-4 py-3">
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <span className="label">Range</span>
+            <span className="font-mono text-[10px] tabular-nums text-amber-glow">
+              {rangeAnchor.rangeNm.toLocaleString()} nm
+            </span>
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-callsign text-muted">
+            <span className="icao text-text">{rangeAnchor.tailNumber}</span>
+            <span className="ml-1 text-muted-faint">
+              · {rangeAnchor.aircraftTypeLabel}
+            </span>
+          </div>
+          <div className="mt-1 font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+            Inner ring = w/ 15% reserve
+          </div>
+        </div>
+      )}
+      {layers.rangeRings && !rangeAnchor && (
+        <div className="border-t border-ink-600/70 px-4 py-3">
+          <div className="mb-1 label">Range</div>
+          <div className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+            No available aircraft at your location
           </div>
         </div>
       )}

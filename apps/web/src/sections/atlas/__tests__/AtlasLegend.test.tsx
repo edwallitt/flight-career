@@ -12,6 +12,9 @@ const ALL_OFF: AtlasLayerSet = {
   jobs: false,
   playerLocation: false,
   trackedFlight: false,
+  rangeRings: false,
+  reachabilityDim: false,
+  nightShade: false,
 };
 
 describe("AtlasLegend", () => {

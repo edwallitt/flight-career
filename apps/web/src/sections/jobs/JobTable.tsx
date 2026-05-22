@@ -404,7 +404,14 @@ export function JobTable({
           const isGrouped = group.members.length > 1;
           const isExpanded = isGrouped && expanded.has(groupKey);
           return (
-            <div key={groupKey + ":" + job.id}>
+            <div
+              key={groupKey + ":" + job.id}
+              // Whitespace-separated id list so deep links from the Atlas can
+              // find the group via `[data-job-ids~="42"]`. Includes every
+              // member, so a collapsed group still scrolls into view when one
+              // of its hidden members is the deep-link target.
+              data-job-ids={group.members.map((m) => m.id).join(" ")}
+            >
               <Row
                 job={job}
                 idx={idx}

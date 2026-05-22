@@ -141,6 +141,48 @@ describe("JobBoard — rendering", () => {
   });
 });
 
+describe("JobBoard — deep-link via ?jobId=", () => {
+  // The Atlas drawer's "View in Job Board" button navigates with this
+  // query param. If JobBoard fails to honor it, the player lands on the
+  // board with nothing selected and has to re-find their job — the exact
+  // problem the deep link is meant to solve.
+  it("auto-selects the row matching ?jobId= on mount", async () => {
+    renderWithProviders(<JobBoard />, {
+      route: "/jobs?jobId=42",
+      seed: (h) => {
+        seedDefaults(h, [
+          makeJob({ id: 41, clientName: "Other Job" }),
+          makeJob({ id: 42, clientName: "Deep Link Target" }),
+        ]);
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+        // JobDrawer fires these per-id queries on mount.
+        h.seedQuery(["jobs", "getById"], { id: 42, clientName: "Deep Link Target" });
+        h.seedQuery(["jobs", "getBriefing"], null);
+        h.seedQuery(["aircraft", "candidatesForJob"], { ranked: [] });
+      },
+    });
+    // The drawer header echoes the selected id, zero-padded to 5 chars.
+    await waitFor(() =>
+      expect(screen.getByText(/#00042/)).toBeInTheDocument(),
+    );
+  });
+
+  it("falls back to no selection when ?jobId= isn't a positive number", () => {
+    const { container } = renderWithProviders(<JobBoard />, {
+      route: "/jobs?jobId=not-a-number",
+      seed: (h) => {
+        seedDefaults(h, [makeJob({ id: 1 })]);
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    // Drawer always renders for layout-stability reasons; what we want is
+    // that it stays in the closed (aria-hidden=true) state.
+    const drawer = container.querySelector("aside[aria-hidden]");
+    expect(drawer).not.toBeNull();
+    expect(drawer?.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
 describe("JobBoard — urgency tally chips", () => {
   it("counts each urgency across the full (unfiltered) list and zero-pads", () => {
     renderWithProviders(<JobBoard />, {

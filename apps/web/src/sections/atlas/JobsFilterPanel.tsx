@@ -1,5 +1,6 @@
 import type {
   AtlasJobClassFilter,
+  AtlasJobColorBy,
   AtlasJobFilters,
 } from "../../components/map/AtlasMap.js";
 
@@ -15,6 +16,42 @@ interface JobsFilterPanelProps {
   totalJobs: number;
   recentFlightsAutoDisabled: boolean;
   onUndoAutoDisable: () => void;
+  // Color encoding for job lines. Three modes — see AtlasJobColorBy. Fit
+  // is computed against the player's *actual* position regardless of any
+  // planning override, so we surface a warning when both are active.
+  colorBy: AtlasJobColorBy;
+  onColorByChange: (next: AtlasJobColorBy) => void;
+  fitDataLoading: boolean;
+  isPlanningOverride: boolean;
+}
+
+function ColorByChip({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  // Slightly heavier visual than ClassChip — the encoding switch is a
+  // bigger commitment than a filter toggle, and the active state should
+  // look more like a radio button than a sub-filter.
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={[
+        "flex-1 rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign transition-colors",
+        active
+          ? "border-amber-deep bg-amber-glow/[0.12] text-amber-glow shadow-[0_0_8px_rgba(212,165,116,0.18)]"
+          : "border-ink-600 bg-ink-750 text-muted hover:border-amber-deep/60 hover:text-amber-glow",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
 }
 
 function ClassChip({
@@ -107,6 +144,10 @@ export function JobsFilterPanel({
   totalJobs,
   recentFlightsAutoDisabled,
   onUndoAutoDisable,
+  colorBy,
+  onColorByChange,
+  fitDataLoading,
+  isPlanningOverride,
 }: JobsFilterPanelProps) {
   const toggleClass = (c: AtlasJobClassFilter) => {
     if (c === "any") {
@@ -138,6 +179,39 @@ export function JobsFilterPanel({
 
   return (
     <div className="border-b border-ink-600 bg-ink-800/80 px-4 pt-4 pb-4">
+      {/* Color encoding selector. Sits above the filter chips because it
+          changes what every job line *means* — bigger semantic shift than
+          which jobs are visible. */}
+      <div className="mb-3">
+        <div className="mb-1.5 flex items-baseline justify-between">
+          <span className="label">Color by</span>
+          {fitDataLoading && (
+            <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">
+              loading fit…
+            </span>
+          )}
+        </div>
+        <div className="flex gap-1">
+          {(["role", "fit", "rate"] as const).map((mode) => (
+            <ColorByChip
+              key={mode}
+              label={mode === "rate" ? "$ / NM" : mode.toUpperCase()}
+              active={colorBy === mode}
+              onClick={() => onColorByChange(mode)}
+            />
+          ))}
+        </div>
+        {colorBy === "fit" && isPlanningOverride && (
+          // The advisor flagged this correctness boundary: fit colors are
+          // always computed from where the player *actually* is, not the
+          // planning override. The chip tells the player so they don't
+          // assume "ready" means "ready from CYHZ."
+          <div className="mt-2 rounded-sm border border-amber-deep/40 bg-amber-glow/[0.05] px-2 py-1 font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
+            Fit reflects your actual position
+          </div>
+        )}
+      </div>
+
       <div className="flex items-baseline justify-between">
         <span className="label">Jobs filter</span>
         <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-faint">

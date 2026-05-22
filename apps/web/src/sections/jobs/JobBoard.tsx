@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { trpc } from "../../trpc.js";
 import { FitLegend } from "./FitLegend.js";
 import { FleetStrip } from "./FleetStrip.js";
@@ -37,6 +38,28 @@ export function JobBoard() {
   // the next leg of flying is right at the top.
   const [sort, setSort] = useState<SortState>({ key: "payHour", dir: "desc" });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  // Deep-link support: `?jobId=42` (used by the Atlas drawer's "View in Job
+  // Board" button) selects that job on arrival and scrolls it into view. We
+  // read-only on URL change — closing the drawer doesn't strip the param,
+  // and selecting a different row doesn't write it back. That keeps deep
+  // links idempotent and lets react-router stay in charge of history.
+  const [searchParams] = useSearchParams();
+  const deepLinkJobId = useMemo(() => {
+    const raw = searchParams.get("jobId");
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [searchParams]);
+  // Tracks the last id we honored so re-arrivals at the same URL don't keep
+  // overriding the user's manual selection.
+  const lastDeepLinkRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (deepLinkJobId == null) return;
+    if (lastDeepLinkRef.current === deepLinkJobId) return;
+    lastDeepLinkRef.current = deepLinkJobId;
+    setSelectedId(deepLinkJobId);
+  }, [deepLinkJobId]);
   // Pause flag — set true while the player is hovering the table or has a
   // drawer open. While paused, the 10s refetch is suspended so rows don't
   // re-sort under the cursor mid-click.
@@ -58,6 +81,24 @@ export function JobBoard() {
   const lastTick = tickNow.data;
 
   const allJobs: JobRow[] = list.data?.jobs ?? [];
+
+  // After the list resolves with a deep-linked selection, scroll the matching
+  // group's row into view. Runs once per (selectedId, jobs-loaded) pair —
+  // re-renders for refetches don't keep yanking the viewport.
+  const lastScrolledIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (selectedId == null || allJobs.length === 0) return;
+    if (lastScrolledIdRef.current === selectedId) return;
+    if (!allJobs.some((j) => j.id === selectedId)) return; // job not on the board (expired / filtered out)
+    const node = document.querySelector(
+      `[data-job-ids~="${selectedId}"]`,
+    );
+    if (node instanceof HTMLElement) {
+      node.scrollIntoView({ block: "center", behavior: "smooth" });
+      lastScrolledIdRef.current = selectedId;
+    }
+  }, [selectedId, allJobs]);
+
   const playerLocationIcao = list.data?.playerLocationIcao ?? "";
   const recommendedJobId = list.data?.recommendedJobId ?? null;
   const fleet = list.data?.fleet ?? EMPTY_FLEET;
