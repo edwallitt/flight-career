@@ -18,6 +18,7 @@ import {
   type JobFit,
   type JobReachability,
   type Role,
+  priceFerryLeg,
 } from "@flightcareer/shared";
 import { and, count, eq, inArray, lt, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
@@ -455,6 +456,10 @@ export interface FerryAircraftSummary {
   cruiseSpeedKts: number;
   rangeNm: number;
   fuelType: "avgas" | "jet-a";
+  // Carried so the job board can compute the ferry's net $/hr (fuel comes out
+  // of the player's pocket on a ferry leg; the aircraft is supplied, but the
+  // gas isn't).
+  fuelBurnGph: number;
   tail: string;
 }
 
@@ -513,6 +518,7 @@ function rowToListItem(
         cruiseSpeedKts: t.cruiseSpeedKts,
         rangeNm: t.rangeNm,
         fuelType: t.fuelType,
+        fuelBurnGph: t.fuelBurnGph,
         tail: row.ferryAircraftTail,
       };
     }
@@ -602,6 +608,23 @@ export interface FleetReadout {
   rentalsHere: Array<FleetReadoutAircraft & { rentalRatePerHour: number }>;
 }
 
+// Compact active-job summary surfaced on the board so the UI can switch
+// context without a second tRPC round-trip. The full ActiveJobSnapshot
+// (drawer / in-flight surface needs it) stays at lifecycle.getActiveJob.
+export interface JobBoardActiveJobSummary {
+  jobId: number;
+  state: "accepted" | "briefed" | "in_progress";
+  originIcao: string;
+  destinationIcao: string;
+  clientName: string | null;
+  jobType: "standard" | "ferry";
+  // Sim-time ms at which the player would arrive at destinationIcao, given
+  // cruise + distance. Null when we can't compute (no aircraft snapshot, no
+  // cruise speed). Used to caption the rec card with something more concrete
+  // than "after arrival".
+  etaSimMs: number | null;
+}
+
 export interface JobBoardWithReachability {
   jobs: JobListItemWithReachability[];
   playerLocationIcao: string;
@@ -611,6 +634,12 @@ export interface JobBoardWithReachability {
   // when nothing scores well (e.g. board empty, or everything is locked /
   // expiring soon / weather-strict).
   recommendedJobId: number | null;
+  // Set when the player has accepted/briefed/in-flight on a contract. When
+  // present, recommendedJobId is computed from the active job's destination
+  // (best $/hr awaiting you when you land), not your current physical
+  // location. The web app uses this to render a slim banner above the rec
+  // card so the board doesn't pretend you're free.
+  activeJob: JobBoardActiveJobSummary | null;
 }
 
 export function getOpenJobsWithReachability(): JobBoardWithReachability {
@@ -625,6 +654,9 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
       bestCruiseSpeedKts: null,
       positioningDistanceNm: null,
       payHourCents: null,
+      netPayHourCents: null,
+      fuelCostCents: 0,
+      rentalCostCents: 0,
     };
     return {
       jobs: items.map((j) => ({
@@ -636,6 +668,7 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
       simNow: Date.now(),
       fleet: { ownedHere: [], ownedElsewhere: 0, rentalsHere: [] },
       recommendedJobId: null,
+      activeJob: null,
     };
   }
 
@@ -668,7 +701,9 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     rangeNm: type.rangeNm,
     isAvailable: owned.status === "available",
   }));
-  // Fit context — richer, includes payload, cruise, and unpaved capability.
+  // Fit context — richer, includes payload, cruise, and unpaved capability,
+  // plus the cost inputs (fuel burn + type, rental rate) that feed
+  // netPayHourCents.
   const ownedAircraftFit: FitOwnedAircraft[] = ownedRows.map(
     ({ owned, type }) => ({
       aircraftTypeId: type.id,
@@ -679,6 +714,8 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
       maxPayloadLbs: type.maxPayloadLbs,
       unpavedCapable: type.unpavedCapable,
       isAvailable: owned.status === "available",
+      fuelBurnGph: type.fuelBurnGph,
+      fuelType: type.fuelType,
     }),
   );
 
@@ -700,7 +737,28 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     cruiseSpeedKts: type.cruiseSpeedKts,
     maxPayloadLbs: type.maxPayloadLbs,
     unpavedCapable: type.unpavedCapable,
+    fuelBurnGph: type.fuelBurnGph,
+    fuelType: type.fuelType,
+    rentalRatePerHour: type.rentalRatePerHour,
   }));
+
+  // Live fuel prices at the player's location, both fuel types. Keyed
+  // `${icao}:${fuelType}` to match what JobFitContext expects. Missing rows
+  // (drift never ran, fuel type not stocked) fall through to the fit
+  // calculator, which leaves fuelCostCents at 0 — better to under-cost than
+  // surface a fake price.
+  const fuelPriceRows = db
+    .select()
+    .from(fuelPriceCurrent)
+    .where(eq(fuelPriceCurrent.airportIcao, playerLocationIcao))
+    .all();
+  const fuelPricesByIcao = new Map<string, number>();
+  for (const r of fuelPriceRows) {
+    fuelPricesByIcao.set(
+      `${r.airportIcao}:${r.fuelType}`,
+      r.currentPriceCents,
+    );
+  }
 
   const airportRows = db.select().from(airports).all();
   // Reachability uses lat/lon only; fit also needs the paved-runway flag so
@@ -732,11 +790,28 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
             bestCruiseSpeedKts: job.ferryAircraft?.cruiseSpeedKts ?? null,
             positioningDistanceNm: null,
             payHourCents: null,
+            netPayHourCents: null,
+            fuelCostCents: 0,
+            rentalCostCents: 0,
           },
         };
       }
       const cruise = job.ferryAircraft?.cruiseSpeedKts ?? 0;
-      const flightHrs = cruise > 0 ? job.distanceNm / cruise : 0;
+      // Net price the ferry leg using the player-location fuel price. Ferry
+      // aircraft is supplied (no rental cost), but the player pays for the
+      // gas to fly it.
+      const ferryPrice =
+        cruise > 0 && job.ferryAircraft
+          ? priceFerryLeg(
+              job.pay,
+              job.distanceNm,
+              cruise,
+              job.ferryAircraft.fuelBurnGph,
+              job.ferryAircraft.fuelType,
+              playerLocationIcao,
+              fuelPricesByIcao,
+            )
+          : null;
       if (job.originIcao === playerLocationIcao) {
         return {
           ...job,
@@ -747,10 +822,10 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
             bestAircraftTypeId: job.ferryAircraft?.aircraftTypeId ?? null,
             bestCruiseSpeedKts: cruise || null,
             positioningDistanceNm: null,
-            payHourCents:
-              cruise > 0
-                ? Math.round(job.pay / Math.max(0.1, flightHrs))
-                : null,
+            payHourCents: ferryPrice?.payHourCents ?? null,
+            netPayHourCents: ferryPrice?.netPayHourCents ?? null,
+            fuelCostCents: ferryPrice?.fuelCostCents ?? 0,
+            rentalCostCents: 0,
           },
         };
       }
@@ -774,10 +849,10 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
           bestAircraftTypeId: job.ferryAircraft?.aircraftTypeId ?? null,
           bestCruiseSpeedKts: cruise || null,
           positioningDistanceNm: distance ?? null,
-          payHourCents:
-            cruise > 0
-              ? Math.round(job.pay / Math.max(0.1, flightHrs))
-              : null,
+          payHourCents: ferryPrice?.payHourCents ?? null,
+          netPayHourCents: ferryPrice?.netPayHourCents ?? null,
+          fuelCostCents: ferryPrice?.fuelCostCents ?? 0,
+          rentalCostCents: 0,
         },
       };
     }
@@ -813,6 +888,7 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
         ownedAircraft: ownedAircraftFit,
         rentalsAtPlayerLocation: rentalsFit,
         airports: fitAirportMap,
+        fuelPricesByIcao,
       },
     );
 
@@ -848,6 +924,80 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     rentalRatePerHour: type.rentalRatePerHour,
   }));
 
+  // Active job → board summary. The full snapshot lives at
+  // lifecycle.getActiveJob; here we only need enough to drive the banner +
+  // recommendation pivot. Inlined to avoid a circular import with the
+  // lifecycle service (jobLifecycle/active.ts already depends on this file's
+  // siblings).
+  const activeJob: JobBoardActiveJobSummary | null = (() => {
+    if (
+      careerRow.activeJobId == null ||
+      careerRow.activeFlightState == null
+    ) {
+      return null;
+    }
+    const jobRow = db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.id, careerRow.activeJobId))
+      .get();
+    if (!jobRow) return null;
+    // ETA: only meaningful when we know the cruise speed of the dispatched
+    // aircraft. flightStartedAt + (distanceNm / cruise) is the in-flight ETA;
+    // for accepted/briefed we use simNow + flight time as a proxy "would
+    // arrive in X" hint.
+    let etaSimMs: number | null = null;
+    const typeId = (() => {
+      if (
+        careerRow.activeAircraftSource === "owned" &&
+        careerRow.activeAircraftOwnedId != null
+      ) {
+        const ownedRow = db
+          .select()
+          .from(ownedAircraft)
+          .where(eq(ownedAircraft.id, careerRow.activeAircraftOwnedId))
+          .get();
+        return ownedRow?.aircraftTypeId ?? null;
+      }
+      return careerRow.activeAircraftRentalTypeId ?? null;
+    })();
+    if (typeId) {
+      const t = db
+        .select()
+        .from(aircraftTypes)
+        .where(eq(aircraftTypes.id, typeId))
+        .get();
+      if (t && t.cruiseSpeedKts > 0) {
+        const flightHrs = jobRow.distanceNm / t.cruiseSpeedKts;
+        const start = careerRow.flightStartedAt ?? simNow;
+        etaSimMs = Math.round(start + flightHrs * 60 * 60 * 1000);
+      }
+    }
+    return {
+      jobId: jobRow.id,
+      state: careerRow.activeFlightState,
+      originIcao: jobRow.originIcao,
+      destinationIcao: jobRow.destinationIcao,
+      clientName: jobRow.ferryOwnerName ?? null,
+      jobType: jobRow.jobType,
+      etaSimMs,
+    };
+  })();
+
+  // Hydrate a friendlier client name from the client registry when we have
+  // an id, falling back to the ferry-owner name already on the row.
+  if (activeJob && activeJob.clientName == null) {
+    const jobRow = db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.id, activeJob.jobId))
+      .get();
+    if (jobRow?.clientId) {
+      const client = getClientById(jobRow.clientId);
+      if (client) activeJob.clientName = client.name;
+    }
+  }
+
   const recommendedJobId = pickRecommendedJobId(
     enriched.map((j) => ({
       id: j.id,
@@ -856,7 +1006,13 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
       expiresAt: j.expiresAt,
       weatherSensitivity: j.weatherSensitivity,
     })),
-    { playerLocationIcao, simNow },
+    {
+      playerLocationIcao,
+      simNow,
+      ...(activeJob
+        ? { pivotOriginIcao: activeJob.destinationIcao }
+        : {}),
+    },
   );
 
   return {
@@ -865,6 +1021,7 @@ export function getOpenJobsWithReachability(): JobBoardWithReachability {
     simNow,
     fleet: { ownedHere, ownedElsewhere, rentalsHere },
     recommendedJobId,
+    activeJob,
   };
 }
 

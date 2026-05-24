@@ -197,6 +197,73 @@ describe("getOpenJobsWithReachability", () => {
     // The default rental fixture parks a Bonanza G36 at CYHZ.
     expect(result.fleet.rentalsHere.some((r) => r.cls === "SEP")).toBe(true);
   });
+
+  it("populates netPayHourCents alongside payHourCents for ready jobs", () => {
+    insertOwnedAircraft({ aircraftTypeId: "c172", currentLocationIcao: "CYHZ" });
+    insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      payloadLbs: 140,
+      pay: 64_000,
+    });
+    const result = getOpenJobsWithReachability();
+    const fit = result.jobs[0]!.fit;
+    expect(fit.status).toBe("ready");
+    expect(fit.payHourCents).toBeGreaterThan(0);
+    expect(fit.netPayHourCents).not.toBeNull();
+    // Net should always be ≤ gross — we never bonus the player.
+    expect(fit.netPayHourCents!).toBeLessThanOrEqual(fit.payHourCents!);
+  });
+
+  it("returns activeJob: null when the career has no active flight", () => {
+    const result = getOpenJobsWithReachability();
+    expect(result.activeJob).toBeNull();
+  });
+
+  it("surfaces activeJob summary and pivots the recommendation to the destination", () => {
+    // Player flying CYHZ → CYQM (owned C172). Two open jobs: one departing
+    // CYHZ (where the player physically is), one departing CYQM (where the
+    // player will be when they land). The pivot should pick the CYQM job.
+    insertOwnedAircraft({ aircraftTypeId: "c172", currentLocationIcao: "CYHZ" });
+    const flying = insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYQM",
+      payloadLbs: 200,
+      pay: 80_000,
+    });
+    insertJob({
+      originIcao: "CYHZ",
+      destinationIcao: "CYAW",
+      payloadLbs: 100,
+      pay: 99_999, // gross-higher than the pivot pick — but at the wrong airport
+    });
+    const cyqmJob = insertJob({
+      originIcao: "CYQM",
+      destinationIcao: "CYHZ",
+      payloadLbs: 100,
+      pay: 60_000,
+    });
+
+    // Splice the player into an in-flight state on `flying`.
+    db
+      .update(career)
+      .set({
+        activeJobId: flying.id,
+        activeFlightState: "in_progress",
+        activeAircraftSource: "rental",
+        activeAircraftRentalTypeId: "c172",
+      })
+      .where(eq(career.id, 1))
+      .run();
+
+    const result = getOpenJobsWithReachability();
+    expect(result.activeJob).not.toBeNull();
+    expect(result.activeJob!.jobId).toBe(flying.id);
+    expect(result.activeJob!.destinationIcao).toBe("CYQM");
+    // Recommendation pivots away from the higher-paying CYHZ job to the
+    // CYQM job — that's where the player will actually be.
+    expect(result.recommendedJobId).toBe(cyqmJob.id);
+  });
 });
 
 describe("getJobById", () => {

@@ -36,6 +36,8 @@ const C172: FitOwnedAircraft = {
   maxPayloadLbs: 880,
   unpavedCapable: false,
   isAvailable: true,
+  fuelBurnGph: 8,
+  fuelType: "avgas",
 };
 
 const BONANZA_RENTAL: FitRentalAircraft = {
@@ -45,6 +47,10 @@ const BONANZA_RENTAL: FitRentalAircraft = {
   cruiseSpeedKts: 165,
   maxPayloadLbs: 1100,
   unpavedCapable: false,
+  fuelBurnGph: 14,
+  fuelType: "avgas",
+  // $200/hr wet rate — comparable to a real club Bonanza.
+  rentalRatePerHour: 20_000,
 };
 
 function ctx(over: Partial<JobFitContext> = {}): JobFitContext {
@@ -54,6 +60,12 @@ function ctx(over: Partial<JobFitContext> = {}): JobFitContext {
     ownedAircraft: [],
     rentalsAtPlayerLocation: [],
     airports: AIRPORTS,
+    // Default fuel prices: avgas $7/gal, jet-a $5/gal at CYHZ. Tests that
+    // assert specific net values can override via `over`.
+    fuelPricesByIcao: new Map<string, number>([
+      ["CYHZ:avgas", 700],
+      ["CYHZ:jet-a", 500],
+    ]),
     ...over,
   };
 }
@@ -180,5 +192,96 @@ describe("pickRecommendedJobId", () => {
   it("returns null when nothing qualifies", () => {
     const id = pickRecommendedJobId([], { playerLocationIcao: "CYHZ", simNow });
     expect(id).toBeNull();
+  });
+
+  it("with pivotOriginIcao, picks best job departing the pivot regardless of fit", () => {
+    // Player is at CYHZ but "in flight to CYQM" — pivot says: pick best job
+    // departing CYQM. Fit-from-CYHZ may be reposition or anything; we still
+    // include it. Locked is excluded because the player can't fly it at all.
+    const future: RecommendInput[] = [
+      // High-pay job at CYHZ — should be ignored under pivot.
+      readyAt(1, "CYHZ", 900_000),
+      // Mid-pay job at CYQM, fit=reposition — should win.
+      {
+        ...readyAt(2, "CYQM", 500_000),
+        fit: {
+          ...readyAt(2, "CYQM", 500_000).fit,
+          status: "reposition",
+        } as JobFit,
+      },
+      // Locked job at CYQM — should be excluded even though pivot matches.
+      {
+        ...readyAt(3, "CYQM", 999_999),
+        fit: { ...readyAt(3, "CYQM", 0).fit, status: "locked" } as JobFit,
+      },
+    ];
+    const id = pickRecommendedJobId(future, {
+      playerLocationIcao: "CYHZ",
+      simNow,
+      pivotOriginIcao: "CYQM",
+    });
+    expect(id).toBe(2);
+  });
+});
+
+describe("computeJobFit — net pay/hour", () => {
+  // C172 at origin, $640 contract, 8nm hop. Floor of 0.1 hr applies, so
+  // hours = 0.1. Fuel cost = $7/gal × 8 gph × 0.1 hr = $5.60 = 560 cents.
+  // Net = ($640 - $5.60) / 0.1 hr = $6,344 / hr.
+  it("computes net = (pay - fuel) / hours for owned aircraft using player-airport fuel price", () => {
+    const r = computeJobFit(JOB_SHORTHOP, ctx({ ownedAircraft: [C172] }));
+    expect(r.status).toBe("ready");
+    expect(r.fuelCostCents).toBeGreaterThan(0);
+    expect(r.rentalCostCents).toBe(0);
+    expect(r.netPayHourCents).toBeLessThan(r.payHourCents ?? 0);
+  });
+
+  // Bonanza rental at $200/hr wet. Hours = 0.1, rental = 20000 × 0.1 = 2000c.
+  // Fuel cost is zero for rentals (wet rate covers it).
+  it("for rentals: rental cost is charged, fuel is zero (wet rate)", () => {
+    const r = computeJobFit(
+      JOB_SHORTHOP,
+      ctx({ rentalsAtPlayerLocation: [BONANZA_RENTAL] }),
+    );
+    expect(r.status).toBe("ready");
+    expect(r.fuelCostCents).toBe(0);
+    expect(r.rentalCostCents).toBeGreaterThan(0);
+    expect(r.netPayHourCents).toBeLessThan(r.payHourCents ?? 0);
+  });
+
+  // When fuel-price map is empty (drift table cold-start), net falls through
+  // to "no fuel cost charged" rather than returning null.
+  it("falls back to gross when fuel-prices map has no entry for the candidate's fuel type", () => {
+    const r = computeJobFit(
+      JOB_SHORTHOP,
+      ctx({
+        ownedAircraft: [C172],
+        fuelPricesByIcao: new Map(),
+      }),
+    );
+    expect(r.fuelCostCents).toBe(0);
+    expect(r.netPayHourCents).toBe(r.payHourCents);
+  });
+
+  // Net is floored at $0/hr when fuel + rental eats more than the contract pays.
+  it("floors net at $0/hr when costs exceed pay rather than going negative", () => {
+    const stingyJob = { ...JOB_SHORTHOP, pay: 100 }; // $1 contract
+    const r = computeJobFit(
+      stingyJob,
+      ctx({ rentalsAtPlayerLocation: [BONANZA_RENTAL] }),
+    );
+    expect(r.status).toBe("ready");
+    expect(r.netPayHourCents).toBe(0);
+  });
+
+  // wont_fit/locked don't choose a candidate, so net is null and the cost
+  // breakdown lines are zero.
+  it("returns null netPayHourCents for wont_fit / locked", () => {
+    const heavy = { ...JOB_SHORTHOP, payloadLbs: 1100 };
+    const r = computeJobFit(heavy, ctx({ ownedAircraft: [C172] }));
+    expect(r.status).toBe("wont_fit");
+    expect(r.netPayHourCents).toBeNull();
+    expect(r.fuelCostCents).toBe(0);
+    expect(r.rentalCostCents).toBe(0);
   });
 });
