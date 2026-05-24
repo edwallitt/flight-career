@@ -1,11 +1,21 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useLocation } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import {
   renderWithProviders,
   type SeedHelpers,
 } from "../../../__tests__/helpers/renderWithProviders.js";
 import { JobBoard } from "../JobBoard.js";
+
+// Probe child used by the URL-persistence tests to expose the current
+// search string into the DOM. The MemoryRouter inside renderWithProviders
+// doesn't expose its router instance, but a child can read useLocation and
+// stamp the search string somewhere RTL can find it.
+function LocationProbe() {
+  const { search } = useLocation();
+  return <div data-testid="location-probe">{search || "(empty)"}</div>;
+}
 
 const SIM_NOW = Date.UTC(2026, 4, 11, 12, 0);
 
@@ -45,6 +55,9 @@ function makeJob(overrides: Record<string, unknown> = {}) {
       bestCruiseSpeedKts: 122,
       positioningDistanceNm: null,
       payHourCents: 50_000,
+      netPayHourCents: 50_000,
+      fuelCostCents: 0,
+      rentalCostCents: 0,
     },
     ...overrides,
   };
@@ -53,6 +66,18 @@ function makeJob(overrides: Record<string, unknown> = {}) {
 function seedDefaults(
   helpers: SeedHelpers,
   jobs: ReturnType<typeof makeJob>[],
+  opts: {
+    recommendedJobId?: number | null;
+    activeJob?: {
+      jobId: number;
+      state: "accepted" | "briefed" | "in_progress";
+      originIcao: string;
+      destinationIcao: string;
+      clientName: string | null;
+      jobType: "standard" | "ferry";
+      etaSimMs: number | null;
+    } | null;
+  } = {},
 ) {
   const { seedQuery } = helpers;
   seedQuery(["jobs", "listWithReachability"], {
@@ -60,7 +85,8 @@ function seedDefaults(
     playerLocationIcao: "CYHZ",
     simNow: SIM_NOW,
     fleet: { ownedHere: [], ownedElsewhere: 0, rentalsHere: [] },
-    recommendedJobId: null,
+    recommendedJobId: opts.recommendedJobId ?? null,
+    activeJob: opts.activeJob ?? null,
   });
   seedQuery(["career", "get"], { simDateTime: SIM_NOW });
   // JobDrawer is always mounted; this one fires unconditionally.
@@ -76,9 +102,9 @@ describe("JobBoard — rendering", () => {
       },
     });
     expect(screen.getByText(/Job Dispatch Board/i)).toBeInTheDocument();
-    // The Role filter chips from JobFilters
+    // The five role chips from JobFilters.
     expect(screen.getByRole("button", { name: "ALL" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "FRY" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "OPN" })).toBeInTheDocument();
   });
 
   it("renders one row per job and surfaces the JobTable", () => {
@@ -108,9 +134,8 @@ describe("JobBoard — rendering", () => {
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    // With the default "Flyable now" filter on but zero jobs, the empty
-    // state surfaces the flyable-specific message — it's the most common
-    // path for a new player.
+    // Default scope is "flyable" — the most common path when a new player
+    // lands on the board with an empty fleet / unfit aircraft.
     expect(
       screen.getByText(/Nothing flyable from here right now/i),
     ).toBeInTheDocument();
@@ -138,6 +163,72 @@ describe("JobBoard — rendering", () => {
       },
     });
     expect(screen.getByText(/Refinery outage — prices up 25%/)).toBeInTheDocument();
+  });
+});
+
+describe("JobBoard — recommendation card", () => {
+  it("renders the Recommended-next card when the server picks a recommendedJobId", () => {
+    renderWithProviders(<JobBoard />, {
+      seed: (h) => {
+        seedDefaults(
+          h,
+          [
+            makeJob({ id: 1, clientName: "Other Client" }),
+            makeJob({
+              id: 2,
+              clientName: "Pick Me",
+              originIcao: "CYHZ",
+              destinationIcao: "CYQM",
+            }),
+          ],
+          { recommendedJobId: 2 },
+        );
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    expect(screen.getByText(/Recommended next/i)).toBeInTheDocument();
+    expect(screen.getByText(/best \$\/hr from CYHZ/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open briefing/i })).toBeInTheDocument();
+  });
+
+  it("clicking Open briefing selects the recommended job into the drawer", async () => {
+    renderWithProviders(<JobBoard />, {
+      seed: (h) => {
+        seedDefaults(
+          h,
+          [
+            makeJob({
+              id: 42,
+              clientName: "Recommended Client",
+            }),
+          ],
+          { recommendedJobId: 42 },
+        );
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+        h.seedQuery(["jobs", "getById"], {
+          id: 42,
+          clientName: "Recommended Client",
+        });
+        h.seedQuery(["jobs", "getBriefing"], null);
+        h.seedQuery(["aircraft", "candidatesForJob"], { ranked: [] });
+      },
+    });
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /Open briefing/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/#00042/)).toBeInTheDocument(),
+    );
+  });
+
+  it("renders nothing when recommendedJobId is null", () => {
+    renderWithProviders(<JobBoard />, {
+      seed: (h) => {
+        seedDefaults(h, [makeJob({ id: 1 })], { recommendedJobId: null });
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    expect(screen.queryByText(/Recommended next/i)).toBeNull();
   });
 });
 
@@ -183,32 +274,8 @@ describe("JobBoard — deep-link via ?jobId=", () => {
   });
 });
 
-describe("JobBoard — urgency tally chips", () => {
-  it("counts each urgency across the full (unfiltered) list and zero-pads", () => {
-    renderWithProviders(<JobBoard />, {
-      seed: (h) => {
-        seedDefaults(h, [
-          makeJob({ id: 1, urgency: "critical" }),
-          makeJob({ id: 2, urgency: "critical" }),
-          makeJob({ id: 3, urgency: "urgent" }),
-          makeJob({ id: 4, urgency: "standard" }),
-        ]);
-        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
-      },
-    });
-    // crit=2, urge=1, stan=1, flex=0 — rendered as zero-padded two-digit chips.
-    const tallies = screen.getAllByText(/^0\d$/);
-    // The pad-2 format is also used by JobFilters counts ("00 / 04"), so just
-    // assert that each expected count value appears at least once.
-    const tallyText = tallies.map((n) => n.textContent);
-    expect(tallyText).toContain("02"); // critical
-    expect(tallyText).toContain("01"); // urgent
-    expect(tallyText).toContain("00"); // flexible
-  });
-});
-
 describe("JobBoard — filter wiring", () => {
-  it("toggling 'Flyable now' off keeps a non-flyable row in view", async () => {
+  it("switching origin scope to 'All' surfaces a locked row that 'Flyable' hides", async () => {
     renderWithProviders(<JobBoard />, {
       seed: (h) => {
         seedDefaults(h, [
@@ -229,18 +296,13 @@ describe("JobBoard — filter wiring", () => {
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    // Default `flyableOnly` is true → the locked row is filtered out
-    // and the table shows the flyable-only empty state.
+    // Default `flyable` scope hides the locked row.
     expect(screen.queryByText("Far Strip Co")).toBeNull();
-
-    // Click the toggle off; row should appear.
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: /Flyable now/i }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "All" }));
     expect(screen.getByText("Far Strip Co")).toBeInTheDocument();
   });
 
-  it("'At my location' filter restricts to rows whose origin matches playerLocationIcao", async () => {
+  it("origin scope 'At CYHZ' restricts to rows whose origin matches playerLocationIcao", async () => {
     renderWithProviders(<JobBoard />, {
       seed: (h) => {
         seedDefaults(h, [
@@ -253,20 +315,21 @@ describe("JobBoard — filter wiring", () => {
     expect(screen.getByText("Local Co")).toBeInTheDocument();
     expect(screen.getByText("Other Co")).toBeInTheDocument();
 
-    // The at-my-location filter button has the literal "@ CYHZ" label; the
-    // job-row buttons just contain "CYHZ" as part of route text.
-    await userEvent.setup().click(screen.getByRole("button", { name: /^@ CYHZ$/ }));
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "At CYHZ" }));
     expect(screen.getByText("Local Co")).toBeInTheDocument();
     expect(screen.queryByText("Other Co")).toBeNull();
   });
 
-  it("role=FRY shows only ferry jobs; role=OPN excludes ferries even though they have role=open", async () => {
+  it("role=OPN shows only open-market jobs but ferry jobs are always visible", async () => {
     renderWithProviders(<JobBoard />, {
       seed: (h) => {
         seedDefaults(h, [
           makeJob({ id: 1, clientName: "Standard Job", role: "open" }),
+          makeJob({ id: 2, clientName: "Bush Job", role: "bush" }),
           makeJob({
-            id: 2,
+            id: 3,
             clientName: "Ferry Job",
             role: "open",
             jobType: "ferry",
@@ -275,32 +338,181 @@ describe("JobBoard — filter wiring", () => {
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole("button", { name: "FRY" }));
-    expect(screen.getByText("Ferry Job")).toBeInTheDocument();
-    expect(screen.queryByText("Standard Job")).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "OPN" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "OPN" }));
     expect(screen.getByText("Standard Job")).toBeInTheDocument();
-    expect(screen.queryByText("Ferry Job")).toBeNull();
+    expect(screen.queryByText("Bush Job")).toBeNull();
+    // Ferries pass through the role filter regardless — they're a job type,
+    // not a career role.
+    expect(screen.getByText("Ferry Job")).toBeInTheDocument();
   });
+});
 
-  it("class filter hides rows whose requiredClass ranks below the chosen minimum", async () => {
+describe("JobBoard — active-job awareness", () => {
+  it("renders ActiveJobBanner when activeJob is set on the response", () => {
     renderWithProviders(<JobBoard />, {
       seed: (h) => {
+        seedDefaults(h, [makeJob({ id: 1 })], {
+          activeJob: {
+            jobId: 41,
+            state: "in_progress",
+            originIcao: "CYHZ",
+            destinationIcao: "CYQM",
+            clientName: "Maritime Cargo",
+            jobType: "standard",
+            etaSimMs: SIM_NOW + 60 * 60 * 1000,
+          },
+        });
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    expect(screen.getByText(/Working on/i)).toBeInTheDocument();
+    expect(screen.getByText(/#00041/)).toBeInTheDocument();
+    // Destination is highlighted in amber — assert presence via the banner's
+    // accessible label which mentions the destination ICAO.
+    expect(
+      screen.getByLabelText(/job #00041 to CYQM/i),
+    ).toBeInTheDocument();
+  });
+
+  it("captions the recommendation card 'after arrival' when activeJob is set", () => {
+    renderWithProviders(<JobBoard />, {
+      seed: (h) => {
+        seedDefaults(
+          h,
+          [
+            makeJob({
+              id: 2,
+              clientName: "Best Pick",
+              originIcao: "CYQM",
+              destinationIcao: "CYYT",
+            }),
+          ],
+          {
+            recommendedJobId: 2,
+            activeJob: {
+              jobId: 41,
+              state: "briefed",
+              originIcao: "CYHZ",
+              destinationIcao: "CYQM",
+              clientName: "Maritime",
+              jobType: "standard",
+              etaSimMs: null,
+            },
+          },
+        );
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    expect(
+      screen.getByText(/best \$\/hr from CYQM \(after arrival\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no banner when activeJob is null", () => {
+    renderWithProviders(<JobBoard />, {
+      seed: (h) => {
+        seedDefaults(h, [makeJob({ id: 1 })]);
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    expect(screen.queryByText(/Working on/i)).toBeNull();
+  });
+});
+
+describe("JobBoard — URL-persisted filters", () => {
+  // Filter state is encoded as ?origin=&role=&sort=. The board parses these
+  // on mount (shareable / reload-safe / Atlas deep-linkable) and writes
+  // them back on change. Defaults are omitted from the URL to keep it tidy.
+
+  it("seeds origin scope, role, and sort from URL params on mount", () => {
+    renderWithProviders(<JobBoard />, {
+      route: "/jobs?origin=here&role=bush&sort=expires:asc",
+      seed: (h) => {
         seedDefaults(h, [
-          makeJob({ id: 1, clientName: "SEP Co", requiredClass: "SEP" }),
-          makeJob({ id: 2, clientName: "MEP Co", requiredClass: "MEP" }),
-          makeJob({ id: 3, clientName: "JET Co", requiredClass: "JET" }),
+          makeJob({ id: 1, clientName: "Bush Co", role: "bush", originIcao: "CYHZ" }),
+          makeJob({ id: 2, clientName: "Other", role: "open", originIcao: "CYHZ" }),
         ]);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
       },
     });
-    await userEvent.setup().click(screen.getByRole("button", { name: "MEP" }));
-    expect(screen.queryByText("SEP Co")).toBeNull();
-    expect(screen.getByText("MEP Co")).toBeInTheDocument();
-    expect(screen.getByText("JET Co")).toBeInTheDocument();
+    // BSH should be the active role.
+    expect(screen.getByRole("button", { name: "BSH" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The "At CYHZ" origin scope active.
+    expect(
+      screen.getByRole("button", { name: "At CYHZ" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // The bush job survives; the open-market one is filtered out.
+    expect(screen.getByText("Bush Co")).toBeInTheDocument();
+    expect(screen.queryByText("Other")).toBeNull();
+  });
+
+  it("writes non-default filters back into the URL when toggled", async () => {
+    renderWithProviders(
+      <>
+        <JobBoard />
+        <LocationProbe />
+      </>,
+      {
+        seed: (h) => {
+          seedDefaults(h, [makeJob({ id: 1 })]);
+          h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+        },
+      },
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "BSH" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location-probe").textContent).toMatch(
+        /role=bush/,
+      ),
+    );
+  });
+
+  it("strips the param when a filter returns to its default", async () => {
+    renderWithProviders(
+      <>
+        <JobBoard />
+        <LocationProbe />
+      </>,
+      {
+        route: "/jobs?role=bush",
+        seed: (h) => {
+          seedDefaults(h, [makeJob({ id: 1 })]);
+          h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+        },
+      },
+    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "ALL" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("location-probe").textContent).not.toMatch(
+        /role=/,
+      ),
+    );
+  });
+
+  it("falls back to defaults when URL params are malformed", () => {
+    renderWithProviders(<JobBoard />, {
+      route: "/jobs?origin=bogus&role=nope&sort=junk",
+      seed: (h) => {
+        seedDefaults(h, []);
+        h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
+      },
+    });
+    // Defaults: ALL role + Flyable origin.
+    expect(screen.getByRole("button", { name: "ALL" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Flyable" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });
 

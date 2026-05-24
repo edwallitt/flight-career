@@ -1,21 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { trpc } from "../../trpc.js";
-import { FitLegend } from "./FitLegend.js";
+import { ActiveJobBanner } from "./ActiveJobBanner.js";
 import { FleetStrip } from "./FleetStrip.js";
 import { FuelShockBanner } from "./FuelShockBanner.js";
 import { JobDrawer } from "./JobDrawer.js";
 import { JobFilters } from "./JobFilters.js";
 import { JobTable } from "./JobTable.js";
+import { RecommendedJobCard } from "./RecommendedJobCard.js";
 import type {
-  ClassFilter,
   FleetReadout,
   JobRow,
+  OriginScope,
   RoleFilter,
+  SortDir,
+  SortKey,
   SortState,
 } from "./types.js";
-
-const CLASS_RANK: Record<string, number> = { SEP: 0, MEP: 1, SET: 2, JET: 3 };
 
 const EMPTY_FLEET: FleetReadout = {
   ownedHere: [],
@@ -23,20 +24,117 @@ const EMPTY_FLEET: FleetReadout = {
   rentalsHere: [],
 };
 
+// Filter state is URL-as-source-of-truth: ?origin=here&role=bush&sort=expires:asc
+// survives reloads, is shareable to teammates and screenshots, and lets the
+// Atlas deep-link target a specific pre-filtered view of the board. Each
+// param has a default — when the URL matches the default, we don't write the
+// param back (keeps URLs short and avoids history churn for "I just clicked
+// the default" interactions).
+const DEFAULT_ORIGIN: OriginScope = "flyable";
+const DEFAULT_ROLE: RoleFilter = "all";
+const DEFAULT_SORT: SortState = { key: "payHour", dir: "desc" };
+
+const VALID_ORIGIN: ReadonlyArray<OriginScope> = ["here", "flyable", "all"];
+const VALID_ROLE: ReadonlyArray<RoleFilter> = [
+  "all",
+  "bush",
+  "air_taxi",
+  "light_jet",
+  "open",
+];
+const VALID_SORT_KEY: ReadonlyArray<SortKey> = ["payHour", "distance", "expires"];
+
+function parseOrigin(raw: string | null): OriginScope {
+  return raw && (VALID_ORIGIN as readonly string[]).includes(raw)
+    ? (raw as OriginScope)
+    : DEFAULT_ORIGIN;
+}
+function parseRole(raw: string | null): RoleFilter {
+  return raw && (VALID_ROLE as readonly string[]).includes(raw)
+    ? (raw as RoleFilter)
+    : DEFAULT_ROLE;
+}
+function parseSort(raw: string | null): SortState {
+  if (!raw) return DEFAULT_SORT;
+  const [key, dir] = raw.split(":");
+  if (
+    key &&
+    dir &&
+    (VALID_SORT_KEY as readonly string[]).includes(key) &&
+    (dir === "asc" || dir === "desc")
+  ) {
+    return { key: key as SortKey, dir: dir as SortDir };
+  }
+  return DEFAULT_SORT;
+}
+
 export function JobBoard() {
-  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
-  const [classFilter, setClassFilter] = useState<ClassFilter>("any");
-  // "Flyable now" replaces the old "reachable only" toggle — it filters to
-  // jobs whose fit.status is ready or reposition, i.e. there's an aircraft
-  // the player can actually dispatch right now that satisfies payload,
-  // range, and capability. Default on; the player can drop it to see the
-  // upgrade-target jobs that need a bigger aircraft.
-  const [flyableOnly, setFlyableOnly] = useState(true);
-  const [atMyLocationOnly, setAtMyLocationOnly] = useState(false);
-  // Pay/hour is the column the player actually cares about: pay normalized
-  // by positioning + flight time. Default descending so the best return on
-  // the next leg of flying is right at the top.
-  const [sort, setSort] = useState<SortState>({ key: "payHour", dir: "desc" });
+  // URL is the source of truth for filters. setSearchParams is the one
+  // setter we route everything through; React state is derived via useMemo
+  // so we don't double-store anything.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const roleFilter = useMemo(
+    () => parseRole(searchParams.get("role")),
+    [searchParams],
+  );
+  const originScope = useMemo(
+    () => parseOrigin(searchParams.get("origin")),
+    [searchParams],
+  );
+  const sort = useMemo(
+    () => parseSort(searchParams.get("sort")),
+    [searchParams],
+  );
+
+  // Writer that preserves any param we don't manage (jobId deep links,
+  // future ?dev=1 etc.), strips defaults, and uses replace navigation so
+  // every filter click doesn't pollute the back stack.
+  const updateParams = useCallback(
+    (
+      patch: Partial<{
+        origin: OriginScope;
+        role: RoleFilter;
+        sort: SortState;
+      }>,
+    ) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (patch.origin !== undefined) {
+            if (patch.origin === DEFAULT_ORIGIN) next.delete("origin");
+            else next.set("origin", patch.origin);
+          }
+          if (patch.role !== undefined) {
+            if (patch.role === DEFAULT_ROLE) next.delete("role");
+            else next.set("role", patch.role);
+          }
+          if (patch.sort !== undefined) {
+            const isDefault =
+              patch.sort.key === DEFAULT_SORT.key &&
+              patch.sort.dir === DEFAULT_SORT.dir;
+            if (isDefault) next.delete("sort");
+            else next.set("sort", `${patch.sort.key}:${patch.sort.dir}`);
+          }
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+  const setRoleFilter = useCallback(
+    (r: RoleFilter) => updateParams({ role: r }),
+    [updateParams],
+  );
+  const setOriginScope = useCallback(
+    (s: OriginScope) => updateParams({ origin: s }),
+    [updateParams],
+  );
+  const setSort = useCallback(
+    (s: SortState) => updateParams({ sort: s }),
+    [updateParams],
+  );
+
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   // Deep-link support: `?jobId=42` (used by the Atlas drawer's "View in Job
@@ -44,7 +142,6 @@ export function JobBoard() {
   // read-only on URL change — closing the drawer doesn't strip the param,
   // and selecting a different row doesn't write it back. That keeps deep
   // links idempotent and lets react-router stay in charge of history.
-  const [searchParams] = useSearchParams();
   const deepLinkJobId = useMemo(() => {
     const raw = searchParams.get("jobId");
     if (!raw) return null;
@@ -83,8 +180,8 @@ export function JobBoard() {
   const allJobs: JobRow[] = list.data?.jobs ?? [];
 
   // After the list resolves with a deep-linked selection, scroll the matching
-  // group's row into view. Runs once per (selectedId, jobs-loaded) pair —
-  // re-renders for refetches don't keep yanking the viewport.
+  // row into view. Runs once per (selectedId, jobs-loaded) pair — re-renders
+  // for refetches don't keep yanking the viewport.
   const lastScrolledIdRef = useRef<number | null>(null);
   useEffect(() => {
     if (selectedId == null || allJobs.length === 0) return;
@@ -101,43 +198,43 @@ export function JobBoard() {
 
   const playerLocationIcao = list.data?.playerLocationIcao ?? "";
   const recommendedJobId = list.data?.recommendedJobId ?? null;
+  const recommendedJob = useMemo(
+    () =>
+      recommendedJobId != null
+        ? allJobs.find((j) => j.id === recommendedJobId) ?? null
+        : null,
+    [recommendedJobId, allJobs],
+  );
   const fleet = list.data?.fleet ?? EMPTY_FLEET;
+  const activeJob = list.data?.activeJob ?? null;
+  // When the player is mid-flight, the recommendation card is captioned
+  // with "after arrival at X" instead of "from your current location" —
+  // matches the server-side pivot in pickRecommendedJobId.
+  const recommendationOriginIcao =
+    activeJob?.destinationIcao ?? playerLocationIcao;
 
   const filteredJobs = useMemo(() => {
     return allJobs.filter((j) => {
-      if (roleFilter === "ferry") {
-        if (j.jobType !== "ferry") return false;
-      } else if (roleFilter !== "all") {
-        if (j.jobType === "ferry") return false;
-        if (j.role !== roleFilter) return false;
-      }
-      if (
-        classFilter !== "any" &&
-        CLASS_RANK[j.requiredClass]! < CLASS_RANK[classFilter]!
-      ) {
+      // Role filter — ferries pass through unconditionally (they're a
+      // job type, not a career role) so a player on "Bush" still sees the
+      // ferry contract that drops them at their next pickup.
+      if (roleFilter !== "all" && j.jobType !== "ferry" && j.role !== roleFilter) {
         return false;
       }
-      // Flyable-now keeps ready + reposition. wont_fit + locked are hidden.
+      // Origin scope.
+      if (originScope === "here" && j.originIcao !== playerLocationIcao) {
+        return false;
+      }
       if (
-        flyableOnly &&
+        originScope === "flyable" &&
         j.fit.status !== "ready" &&
         j.fit.status !== "reposition"
       ) {
         return false;
       }
-      if (atMyLocationOnly && j.originIcao !== playerLocationIcao) {
-        return false;
-      }
       return true;
     });
-  }, [
-    allJobs,
-    roleFilter,
-    classFilter,
-    flyableOnly,
-    atMyLocationOnly,
-    playerLocationIcao,
-  ]);
+  }, [allJobs, roleFilter, originScope, playerLocationIcao]);
 
   // Sim time for relative-time formatting in rows. Prefer the value the
   // jobs query already returned (single source of truth, no clock skew
@@ -162,57 +259,33 @@ export function JobBoard() {
             seconds. Select a row to inspect.
           </p>
         </div>
-
-        {/* Right: tally chips */}
-        <div className="flex items-center gap-3">
-          {(["critical", "urgent", "standard", "flexible"] as const).map(
-            (u) => {
-              const count = allJobs.filter((j) => j.urgency === u).length;
-              return (
-                <div
-                  key={u}
-                  className="flex items-center gap-2 rounded-sm border border-ink-600 bg-ink-800 px-3 py-1.5"
-                >
-                  <span
-                    className={[
-                      "h-1.5 w-1.5 rounded-full",
-                      u === "critical" &&
-                        "bg-urgency-critical shadow-[0_0_6px_rgba(225,92,79,0.65)]",
-                      u === "urgent" && "bg-urgency-urgent",
-                      u === "standard" && "bg-urgency-standard",
-                      u === "flexible" && "bg-urgency-flexible",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  />
-                  <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
-                    {u.slice(0, 4)}
-                  </span>
-                  <span className="font-mono tabular-nums text-[12px] text-text-high">
-                    {count.toString().padStart(2, "0")}
-                  </span>
-                </div>
-              );
-            },
-          )}
-        </div>
       </div>
 
       <FuelShockBanner />
 
       <FleetStrip fleet={fleet} playerLocationIcao={playerLocationIcao} />
 
-      <FitLegend />
+      {/* Active-job banner — renders only when the player is mid-flight on
+          a contract. Keeps the board honest about what state they're in. */}
+      <ActiveJobBanner activeJob={activeJob} />
+
+      {/* "What should I fly next?" — surfaced from the server's
+          recommendedJobId pick. Pivots context when mid-flight to "after
+          you arrive at X" so the rec is something the player can act on
+          once they land. */}
+      <RecommendedJobCard
+        job={recommendedJob}
+        simNow={simNow}
+        playerLocationIcao={recommendationOriginIcao}
+        captionMode={activeJob ? "after-arrival" : "from-here"}
+        onOpen={(j) => setSelectedId(j.id)}
+      />
 
       <JobFilters
         roleFilter={roleFilter}
         setRoleFilter={setRoleFilter}
-        classFilter={classFilter}
-        setClassFilter={setClassFilter}
-        flyableOnly={flyableOnly}
-        setFlyableOnly={setFlyableOnly}
-        atMyLocationOnly={atMyLocationOnly}
-        setAtMyLocationOnly={setAtMyLocationOnly}
+        originScope={originScope}
+        setOriginScope={setOriginScope}
         playerLocationIcao={playerLocationIcao}
         totalCount={allJobs.length}
         filteredCount={filteredJobs.length}
@@ -221,9 +294,12 @@ export function JobBoard() {
         lastTick={lastTick}
       />
 
-      {/* Main two-pane area */}
+      {/* Main pane — table only. The drawer is a sibling overlay below so it
+          anchors to the JobBoard root (full vertical height) instead of just
+          the post-strip region. paddingRight reserves space for the drawer
+          so rows aren't hidden behind it. */}
       <div
-        className="relative flex min-h-0 flex-1 transition-[padding] duration-200"
+        className="flex min-h-0 flex-1 transition-[padding] duration-200"
         style={{ paddingRight: drawerOpen ? 440 : 0 }}
       >
         <JobTable
@@ -237,26 +313,26 @@ export function JobBoard() {
           simNow={simNow}
           isLoading={list.isPending}
           recommendedJobId={recommendedJobId}
-          flyableOnly={flyableOnly}
+          originScope={originScope}
           onPauseRefetch={() => setInteractionPaused(true)}
           onResumeRefetch={() => setInteractionPaused(false)}
           onTickNow={() => tickNow.mutate()}
           isTicking={tickNow.isPending}
-          onClearFilters={() => setFlyableOnly(false)}
-        />
-
-        <JobDrawer
-          jobId={selectedId}
-          onClose={() => setSelectedId(null)}
-          simNow={simNow}
-          reachability={
-            selectedId != null
-              ? allJobs.find((j) => j.id === selectedId)?.reachability ?? null
-              : null
-          }
-          playerLocationIcao={playerLocationIcao}
+          onClearFilters={() => setOriginScope("all")}
         />
       </div>
+
+      <JobDrawer
+        jobId={selectedId}
+        onClose={() => setSelectedId(null)}
+        simNow={simNow}
+        reachability={
+          selectedId != null
+            ? allJobs.find((j) => j.id === selectedId)?.reachability ?? null
+            : null
+        }
+        playerLocationIcao={playerLocationIcao}
+      />
     </div>
   );
 }

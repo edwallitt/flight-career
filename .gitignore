@@ -8,6 +8,9 @@ dist
 **/dist/
 **/build/
 
+# Test coverage reports
+**/coverage/
+
 # Env
 .env
 .env.local

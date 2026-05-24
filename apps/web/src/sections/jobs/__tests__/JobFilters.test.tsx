@@ -7,12 +7,8 @@ function renderFilters(overrides: Partial<React.ComponentProps<typeof JobFilters
   const props: React.ComponentProps<typeof JobFilters> = {
     roleFilter: "all",
     setRoleFilter: vi.fn(),
-    classFilter: "any",
-    setClassFilter: vi.fn(),
-    flyableOnly: false,
-    setFlyableOnly: vi.fn(),
-    atMyLocationOnly: false,
-    setAtMyLocationOnly: vi.fn(),
+    originScope: "flyable",
+    setOriginScope: vi.fn(),
     playerLocationIcao: "CYHZ",
     totalCount: 14,
     filteredCount: 5,
@@ -24,96 +20,62 @@ function renderFilters(overrides: Partial<React.ComponentProps<typeof JobFilters
   return props;
 }
 
-describe("JobFilters — role + class chips", () => {
-  it("renders all six role codes and all four class chips", () => {
+describe("JobFilters — role chips", () => {
+  it("renders the five career role codes; ferry is no longer a filter", () => {
     renderFilters();
-    for (const code of ["ALL", "BSH", "ATX", "LJT", "OPN", "FRY"]) {
+    for (const code of ["ALL", "BSH", "ATX", "LJT", "OPN"]) {
       expect(screen.getByRole("button", { name: code })).toBeInTheDocument();
     }
-    for (const label of ["Any", "SEP", "MEP", "SET", "JET"]) {
-      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
-    }
+    expect(screen.queryByRole("button", { name: "FRY" })).toBeNull();
   });
 
   it("invokes setRoleFilter with the selected role id", async () => {
     const setRoleFilter = vi.fn();
     renderFilters({ setRoleFilter });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "BSH" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "BSH" }));
     expect(setRoleFilter).toHaveBeenCalledWith("bush");
-    await user.click(screen.getByRole("button", { name: "FRY" }));
-    expect(setRoleFilter).toHaveBeenCalledWith("ferry");
-  });
-
-  it("invokes setClassFilter with the selected class id", async () => {
-    const setClassFilter = vi.fn();
-    renderFilters({ setClassFilter });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "MEP" }));
-    expect(setClassFilter).toHaveBeenCalledWith("MEP");
   });
 });
 
-describe("JobFilters — flyable + at-my-location toggles", () => {
-  it("toggles flyableOnly via aria-pressed and click", async () => {
-    const setFlyableOnly = vi.fn();
-    renderFilters({ flyableOnly: false, setFlyableOnly });
-    const btn = screen.getByRole("button", { name: /Flyable now/i });
-    expect(btn).toHaveAttribute("aria-pressed", "false");
-    await userEvent.setup().click(btn);
-    expect(setFlyableOnly).toHaveBeenCalledWith(true);
+describe("JobFilters — origin scope segmented control", () => {
+  it("renders the three scope buttons including the ICAO label", () => {
+    renderFilters({ playerLocationIcao: "CYQM" });
+    expect(screen.getByRole("button", { name: "At CYQM" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Flyable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
   });
 
-  it("renders aria-pressed=true when flyableOnly is enabled", () => {
-    renderFilters({ flyableOnly: true });
-    expect(
-      screen.getByRole("button", { name: /Flyable now/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+  it("marks the active scope with aria-pressed and routes clicks to setOriginScope", async () => {
+    const setOriginScope = vi.fn();
+    renderFilters({ originScope: "flyable", setOriginScope });
+    const flyable = screen.getByRole("button", { name: "Flyable" });
+    expect(flyable).toHaveAttribute("aria-pressed", "true");
+    await userEvent.setup().click(screen.getByRole("button", { name: "All" }));
+    expect(setOriginScope).toHaveBeenCalledWith("all");
   });
 
-  it("renders the player ICAO in the at-my-location toggle and toggles it", async () => {
-    const setAtMyLocationOnly = vi.fn();
-    renderFilters({ playerLocationIcao: "CYQM", setAtMyLocationOnly });
-    const toggle = screen.getByRole("button", { name: /CYQM/ });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(toggle).not.toBeDisabled();
-    await userEvent.setup().click(toggle);
-    expect(setAtMyLocationOnly).toHaveBeenCalledWith(true);
-  });
-
-  it("disables the at-my-location toggle when player location is unknown", () => {
+  it("disables the 'At …' button when player location is unknown", () => {
     renderFilters({ playerLocationIcao: "" });
-    const toggle = screen.getByRole("button", { name: /@/ });
-    expect(toggle).toBeDisabled();
+    expect(screen.getByRole("button", { name: "At —" })).toBeDisabled();
   });
 });
 
-describe("JobFilters — counts + lastTick readout", () => {
+describe("JobFilters — counts", () => {
   it("zero-pads filtered/total counts to two digits", () => {
     renderFilters({ filteredCount: 5, totalCount: 14 });
     expect(screen.getByText("05")).toBeInTheDocument();
     expect(screen.getByText("14")).toBeInTheDocument();
   });
-
-  it("omits the last-tick readout when no lastTick is supplied", () => {
-    renderFilters();
-    expect(screen.queryByText(/aged out/)).toBeNull();
-  });
-
-  it("shows +N new / N aged out when lastTick is supplied", () => {
-    renderFilters({ lastTick: { inserted: 3, expired: 2 } });
-    expect(screen.getByText("+3 new")).toBeInTheDocument();
-    expect(screen.getByText("2 aged out")).toBeInTheDocument();
-  });
 });
 
-describe("JobFilters — dev tick button", () => {
-  it("is hidden when ?dev=1 is not set", () => {
-    renderFilters();
+describe("JobFilters — dev-only telemetry", () => {
+  it("hides the last-tick readout and force-tick button when ?dev=1 is not set", () => {
+    renderFilters({ lastTick: { inserted: 3, expired: 2 } });
+    expect(screen.queryByText(/aged out/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Force tick/i })).toBeNull();
   });
 
-  it("renders and triggers onTickNow when ?dev=1 is set", async () => {
+  it("renders both when ?dev=1 is set", async () => {
     const original = window.location.search;
     Object.defineProperty(window, "location", {
       writable: true,
@@ -121,7 +83,9 @@ describe("JobFilters — dev tick button", () => {
     });
     try {
       const onTickNow = vi.fn();
-      renderFilters({ onTickNow });
+      renderFilters({ onTickNow, lastTick: { inserted: 3, expired: 2 } });
+      expect(screen.getByText("+3 new")).toBeInTheDocument();
+      expect(screen.getByText("2 aged out")).toBeInTheDocument();
       const btn = screen.getByRole("button", { name: /Force tick/i });
       await userEvent.setup().click(btn);
       expect(onTickNow).toHaveBeenCalled();
@@ -131,14 +95,5 @@ describe("JobFilters — dev tick button", () => {
         value: { ...window.location, search: original },
       });
     }
-  });
-
-  it("shows 'Ticking…' state when isTicking is true", () => {
-    Object.defineProperty(window, "location", {
-      writable: true,
-      value: { ...window.location, search: "?dev=1" },
-    });
-    renderFilters({ isTicking: true });
-    expect(screen.getByRole("button", { name: /Ticking/i })).toBeDisabled();
   });
 });

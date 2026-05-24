@@ -40,6 +40,9 @@ function makeJob(overrides: Partial<JobRow> = {}): JobRow {
       bestCruiseSpeedKts: 122,
       positioningDistanceNm: null,
       payHourCents: 50_000,
+      netPayHourCents: 50_000,
+      fuelCostCents: 0,
+      rentalCostCents: 0,
     },
   };
   return { ...base, ...overrides } as JobRow;
@@ -51,14 +54,14 @@ function renderTable(
 ) {
   const props: React.ComponentProps<typeof JobTable> = {
     jobs,
-    sort: { key: "pay", dir: "desc" } as SortState,
+    sort: { key: "payHour", dir: "desc" } as SortState,
     onSortChange: vi.fn(),
     selectedId: null,
     onSelect: vi.fn(),
     simNow: SIM_NOW,
     isLoading: false,
     recommendedJobId: null,
-    flyableOnly: false,
+    originScope: "flyable",
     onPauseRefetch: vi.fn(),
     onResumeRefetch: vi.fn(),
     onTickNow: vi.fn(),
@@ -72,15 +75,22 @@ function renderTable(
 
 describe("JobTable — empty + rendering", () => {
   it("renders an empty state when jobs is empty and not loading", () => {
-    renderTable([]);
+    renderTable([], { originScope: "all" });
     expect(screen.getByText(/No jobs available/i)).toBeInTheDocument();
     expect(screen.getByText(/board · empty/i)).toBeInTheDocument();
   });
 
-  it("renders the flyable-only empty message when no jobs survive that filter", () => {
-    renderTable([], { flyableOnly: true });
+  it("renders the flyable-only empty message when no jobs survive that scope", () => {
+    renderTable([], { originScope: "flyable" });
     expect(
       screen.getByText(/Nothing flyable from here right now/i),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the at-my-location empty message under 'here' scope", () => {
+    renderTable([], { originScope: "here" });
+    expect(
+      screen.getByText(/Nothing departing from here right now/i),
     ).toBeInTheDocument();
   });
 
@@ -89,69 +99,53 @@ describe("JobTable — empty + rendering", () => {
     expect(screen.queryByText(/No jobs available/i)).toBeNull();
   });
 
-  it("renders one row per job with origin/destination and pay", () => {
+  it("renders one row per job with origin/destination and the total-pay caption", () => {
     renderTable([
       makeJob({ id: 1, originIcao: "CYHZ", destinationIcao: "CYQM", pay: 25_000 }),
       makeJob({ id: 2, originIcao: "CYQM", destinationIcao: "CYCH", pay: 75_000 }),
     ]);
     expect(screen.getAllByText("CYHZ")).toHaveLength(1);
     expect(screen.getAllByText("CYQM")).toHaveLength(2); // dest of #1, origin of #2
-    expect(screen.getByText("$250")).toBeInTheDocument();
-    expect(screen.getByText("$750")).toBeInTheDocument();
+    // Absolute pay rides under the $/hr cell as "$N total".
+    expect(screen.getByText("$250 total")).toBeInTheDocument();
+    expect(screen.getByText("$750 total")).toBeInTheDocument();
   });
 });
 
 describe("JobTable — sorting", () => {
-  it("sorts rows ascending by pay when sort={pay,asc}", () => {
-    renderTable(
-      [
-        makeJob({ id: 1, pay: 80_000 }),
-        makeJob({ id: 2, pay: 20_000 }),
-        makeJob({ id: 3, pay: 50_000 }),
-      ],
-      { sort: { key: "pay", dir: "asc" } },
-    );
-    // The Pay column renders bare dollar strings — the $/hr column adds
-    // "/hr". Use a regex that excludes the per-hour values.
-    const payCells = screen
-      .getAllByText(/^\$\d+$/)
-      .filter((n) => !n.textContent?.includes("/hr"));
-    expect(payCells.slice(0, 3).map((n) => n.textContent)).toEqual([
-      "$200",
-      "$500",
-      "$800",
-    ]);
-  });
-
   it("clicking the same header flips the direction", async () => {
     const onSortChange = vi.fn();
     renderTable([makeJob()], {
-      sort: { key: "pay", dir: "desc" },
+      sort: { key: "payHour", dir: "desc" },
       onSortChange,
     });
-    await userEvent.setup().click(screen.getByRole("button", { name: "Pay" }));
-    expect(onSortChange).toHaveBeenCalledWith({ key: "pay", dir: "asc" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "$/hr" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "payHour", dir: "asc" });
   });
 
-  it("clicking a different header chooses a column-appropriate default direction", async () => {
+  it("Dist defaults to ascending (short hops first), $/hr to descending", async () => {
     const onSortChange = vi.fn();
     renderTable([makeJob()], {
-      sort: { key: "pay", dir: "desc" },
+      sort: { key: "payHour", dir: "desc" },
       onSortChange,
     });
     const user = userEvent.setup();
-    // Numeric columns default to desc.
     await user.click(screen.getByRole("button", { name: "Dist" }));
-    expect(onSortChange).toHaveBeenLastCalledWith({ key: "distance", dir: "desc" });
-    // Lexical columns default to asc.
-    await user.click(screen.getByRole("button", { name: /Client \/ Role/ }));
-    expect(onSortChange).toHaveBeenLastCalledWith({ key: "client", dir: "asc" });
+    expect(onSortChange).toHaveBeenLastCalledWith({
+      key: "distance",
+      dir: "asc",
+    });
   });
 
-  it("the Flags column header is not interactive", () => {
+  it("only Dist, $/hr, and Window are sortable", () => {
     renderTable([makeJob()]);
-    const flagsBtn = screen.getByRole("button", { name: "Flags" });
-    expect(flagsBtn).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Dist" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "$/hr" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Window" })).toBeInTheDocument();
+    // Client/Route/Load/Urg/Fit are intentionally not sortable now.
+    expect(screen.queryByRole("button", { name: /Client \/ Role/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Pay" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Flags" })).toBeNull();
   });
 });
 
@@ -187,6 +181,7 @@ describe("JobTable — selection + fit", () => {
           cruiseSpeedKts: 176,
           rangeNm: 900,
           fuelType: "avgas",
+          fuelBurnGph: 14,
           tail: "C-FERY",
         },
       }),
@@ -208,6 +203,9 @@ describe("JobTable — selection + fit", () => {
           bestCruiseSpeedKts: null,
           positioningDistanceNm: null,
           payHourCents: null,
+          netPayHourCents: null,
+          fuelCostCents: 0,
+          rentalCostCents: 0,
         },
       }),
     ]);
@@ -230,7 +228,7 @@ describe("JobTable — selection + fit", () => {
     ).toMatch(/bg-amber-glow/);
   });
 
-  it("renders pay/hr from fit.payHourCents", () => {
+  it("renders pay/hr from fit.netPayHourCents as the primary cell, with /hr net label", () => {
     renderTable([
       makeJob({
         id: 1,
@@ -241,11 +239,31 @@ describe("JobTable — selection + fit", () => {
           bestAircraftTypeId: "c172",
           bestCruiseSpeedKts: 122,
           positioningDistanceNm: null,
-          payHourCents: 123_400,
+          payHourCents: 200_000,
+          netPayHourCents: 123_400,
+          fuelCostCents: 8_000,
+          rentalCostCents: 0,
         },
       }),
     ]);
+    // Primary number is net, with the "/hr net" suffix.
     expect(screen.getByText("$1,234")).toBeInTheDocument();
+    expect(screen.getByText("/hr net")).toBeInTheDocument();
+  });
+
+  it("renders the merged Load cell with payload, class, and unpaved pill when required", () => {
+    renderTable([
+      makeJob({
+        id: 1,
+        payloadLbs: 1200,
+        requiredClass: "MEP",
+        requiredCapabilities: ["unpaved"],
+      }),
+    ]);
+    expect(screen.getByText(/1,200/)).toBeInTheDocument();
+    // Class glyph and unpaved pill share the row.
+    expect(screen.getAllByText("MEP").length).toBeGreaterThan(0);
+    expect(screen.getByText("U")).toBeInTheDocument();
   });
 });
 
@@ -256,13 +274,9 @@ describe("JobTable — refetch pause hooks", () => {
     renderTable([makeJob()], { onPauseRefetch, onResumeRefetch });
     const region = screen.getByText("Maritime Cargo Express").closest("div")!
       .parentElement!.parentElement!;
-    // Walk up to the table container that owns the hover handlers.
-    // Easier: trigger directly via the row's button parent chain.
     const user = userEvent.setup();
     await user.hover(region);
     await user.unhover(region);
-    // We don't assert exact call counts (RTL may bubble multiple events);
-    // just that both fired at least once.
     expect(onPauseRefetch).toHaveBeenCalled();
     expect(onResumeRefetch).toHaveBeenCalled();
   });
