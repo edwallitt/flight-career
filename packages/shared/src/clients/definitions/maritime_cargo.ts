@@ -7,7 +7,12 @@ const maritimeCargo: ClientDefinition = {
   homeBaseIcao: "CYHZ",
   description:
     "Routine small-parcel cargo distributor connecting Halifax to Maritime communities.",
-  baseJobsPerDay: 4,
+  // Routine cargo is the new pilot's bread and butter: seasonally flat (it's
+  // not weather-dependent survey/tour work) and gate-0, so it carries the
+  // early game even in winter when the seasonal clients go quiet. Tuned up
+  // from 4 to keep ~6 home-origin SEP jobs on the board so a fresh SEP pilot
+  // at CYHZ always has a stack of flyable work without repositioning.
+  baseJobsPerDay: 6,
   seasonalMultipliers: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
   reputationGateMin: 0,
   reputationGateMax: 50,

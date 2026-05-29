@@ -296,8 +296,13 @@ const OPEN_MARKET_PAYLOAD_RANGE: Record<AircraftClass, [number, number]> = {
   JET: [200, 1800],
 };
 
+// Open-market origins are biased toward smaller fields so the board feels
+// like bush/regional work rather than hub-to-hub airline runs. Majors are
+// de-weighted but not punished — a player based at a major (e.g. CYHZ) still
+// sees a fair share of jobs originate where they are, which together with the
+// home-origin floor below keeps repositioning from dominating the early game.
 const AIRPORT_SIZE_WEIGHT: Record<AirportLite["size"], number> = {
-  major: 1,
+  major: 2,
   regional: 2,
   small: 3,
   remote: 3,
@@ -399,6 +404,14 @@ function buildOpenMarketJob(
 
 const MAX_OPEN_MARKET_PER_TICK = 3;
 
+// Keep at least this many jobs on the board departing from the player's
+// current airport. Branded home-base clients (e.g. Maritime Cargo at CYHZ)
+// usually cover this on their own, but when they're quiet — early game, off
+// season, or a player parked at a field with no resident client — the
+// open-market step backfills home-origin jobs up to this floor so the player
+// always has flyable work without first paying to reposition.
+const MIN_HOME_ORIGIN_JOBS = 3;
+
 // Open-market jobs have a $400 (40,000¢) pay floor. Below this, even a short
 // hop in a wet rental loses money once reposition + landing fees are counted.
 // Branded clients keep their own pay scales.
@@ -409,16 +422,17 @@ export function generateOpenMarketJobs(ctx: GenerationContext): GeneratedJob[] {
   if (deficit <= 0) return [];
   const count = Math.min(deficit, MAX_OPEN_MARKET_PER_TICK);
   const jobs: GeneratedJob[] = [];
-  // Home-airport guarantee: if the player's airport has no jobs already and
-  // we're emitting at least one open-market job, force the first one to
-  // depart from there. Without this, the major-de-weighted origin pick can
-  // leave players at big airports with nothing to fly out.
-  const needsHomeJob =
-    !!ctx.playerLocationIcao &&
-    (ctx.homeOriginJobCount ?? 0) === 0 &&
-    count > 0;
+  // Home-airport floor: backfill home-origin jobs until the board holds at
+  // least MIN_HOME_ORIGIN_JOBS departing from the player's airport. Without
+  // this, the major-de-weighted origin pick leaves players at big airports
+  // (or quiet fields) with little to fly out. Forced jobs come first and are
+  // bounded by the per-tick open-market cap, so the board can take a few ticks
+  // to reach the floor rather than spawning a wall of home jobs at once.
+  const homeForced = ctx.playerLocationIcao
+    ? Math.max(0, MIN_HOME_ORIGIN_JOBS - (ctx.homeOriginJobCount ?? 0))
+    : 0;
   for (let i = 0; i < count; i++) {
-    const force = needsHomeJob && i === 0 ? ctx.playerLocationIcao : undefined;
+    const force = i < homeForced ? ctx.playerLocationIcao : undefined;
     const job = buildOpenMarketJob(ctx, force);
     if (job) jobs.push(job);
   }

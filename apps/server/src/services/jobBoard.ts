@@ -42,8 +42,15 @@ import {
 const TARGET_BOARD_SIZE = 12;
 const SIM_MINUTES_PER_TICK = 30;
 
-// Tunable: target proportion of new jobs that are ferry/repositioning jobs.
-const FERRY_JOB_PROPORTION = 0.3;
+// Ferries are their own content lane — they let the player fly (and get paid
+// for) aircraft they don't own, so they should be a visible, persistent fixture
+// of the board rather than whatever scraps are left after standard jobs fill
+// up. We reserve a floor of ferry contracts and generate them BEFORE the
+// standard top-up so the open-market step fills around them instead of crowding
+// them out. MAX_FERRY_TOPUP_PER_TICK ramps them in over a few ticks rather than
+// dumping the whole floor at once.
+const FERRY_BOARD_TARGET = 4;
+const MAX_FERRY_TOPUP_PER_TICK = 2;
 
 const ROLES: Role[] = ["bush", "air_taxi", "light_jet"];
 
@@ -223,23 +230,40 @@ export function seedFerryJobs(
   return ferries.length;
 }
 
-function rollFerryCount(
-  standardCount: number,
-  deficit: number,
+function currentFerryCount(): number {
+  const row = db
+    .select({ n: count() })
+    .from(jobs)
+    .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
+    .get();
+  return row?.n ?? 0;
+}
+
+// Top the board up toward FERRY_BOARD_TARGET open ferry contracts, generating
+// at most MAX_FERRY_TOPUP_PER_TICK per tick. Inserts the new ferries and
+// returns them. Called BEFORE the standard generation/open-market step so the
+// reserved ferry slots aren't consumed by the open-market deficit fill.
+function topUpFerries(
+  airportsLite: FerryAirportLite[],
+  simNow: number,
   rng: () => number,
-): number {
-  if (deficit <= 0) return 0;
-  // Solve f / (s + f) = p ⇒ f = s · p / (1−p). The fractional part rounds
-  // stochastically so the long-run mix tracks FERRY_JOB_PROPORTION.
-  const ratio = FERRY_JOB_PROPORTION / (1 - FERRY_JOB_PROPORTION);
-  const target = standardCount * ratio;
-  const whole = Math.floor(target);
-  const frac = target - whole;
-  let count = whole + (rng() < frac ? 1 : 0);
-  // Quiet ticks (board near full, no standard jobs created) still occasionally
-  // surface a ferry — without this the board can sit ferry-free for a while.
-  if (standardCount === 0 && rng() < FERRY_JOB_PROPORTION) count = 1;
-  return Math.max(0, Math.min(deficit, count));
+): GeneratedFerry[] {
+  const deficit = Math.max(0, FERRY_BOARD_TARGET - currentFerryCount());
+  const want = Math.min(deficit, MAX_FERRY_TOPUP_PER_TICK);
+  if (want <= 0) return [];
+  const ferryTypes = buildFerryAircraftTypes();
+  const ferries: GeneratedFerry[] = [];
+  for (let i = 0; i < want; i++) {
+    const f = generateFerryJob({
+      airports: airportsLite,
+      aircraftTypes: ferryTypes,
+      rng,
+      simNow,
+    });
+    if (f) ferries.push(f);
+  }
+  insertFerries(ferries);
+  return ferries;
 }
 
 function insertGenerated(generated: GeneratedJob[]): void {
@@ -402,12 +426,21 @@ export function tickJobGeneration(): TickResult {
   const rng = rngFromCryptoSeed();
   const reputationMaps = loadReputation();
   const playerAvailableClasses = loadPlayerAvailableClasses(playerLocationIcao);
+
+  // Ferries first: top the board up to the reserved ferry floor before the
+  // standard generation runs. Because the open-market step fills toward
+  // TARGET_BOARD_SIZE off the live board size, generating ferries now means it
+  // fills *around* them rather than consuming the slots they'd otherwise take.
+  const ferries = topUpFerries(airportsLite, simNow, rng);
+
   const generated = runGenerationTick(ALL_CLIENTS, {
     airports: airportsLite,
     reputationByRole: reputationMaps.byRole,
     reputationByClient: reputationMaps.byClient,
     simNow,
     rng,
+    // Includes the ferries just inserted, so the open-market deficit fill
+    // reserves their space instead of crowding them out.
     currentBoardSize: currentBoardSize(),
     targetBoardSize: TARGET_BOARD_SIZE,
     playerLocationIcao,
@@ -416,30 +449,6 @@ export function tickJobGeneration(): TickResult {
   });
 
   insertGenerated(generated);
-
-  // Mix in ferry/repositioning jobs to about FERRY_JOB_PROPORTION of new jobs.
-  // Capped to remaining board deficit so a busy board doesn't blow past target.
-  // currentBoardSize() re-queries post-insert so it already includes the
-  // standard jobs we just persisted — don't double-subtract.
-  const remainingDeficit = Math.max(
-    0,
-    TARGET_BOARD_SIZE - currentBoardSize(),
-  );
-  const ferryCount = rollFerryCount(generated.length, remainingDeficit, rng);
-  const ferries: GeneratedFerry[] = [];
-  if (ferryCount > 0) {
-    const ferryTypes = buildFerryAircraftTypes();
-    for (let i = 0; i < ferryCount; i++) {
-      const f = generateFerryJob({
-        airports: airportsLite,
-        aircraftTypes: ferryTypes,
-        rng,
-        simNow,
-      });
-      if (f) ferries.push(f);
-    }
-    insertFerries(ferries);
-  }
 
   return {
     expired,

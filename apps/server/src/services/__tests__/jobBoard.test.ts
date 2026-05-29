@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db/client.js";
 import { career, jobs } from "../../db/schema.js";
@@ -92,6 +92,44 @@ describe("tickJobGeneration", () => {
         shocksExpired: 0,
       },
     });
+  });
+
+  it("maintains a persistent floor of open ferry contracts", () => {
+    // Ferries are their own content lane (fly aircraft you don't own), so the
+    // tick reserves a floor of them rather than letting the open-market top-up
+    // crowd them out. A few ticks should reach the floor and then hold it even
+    // as the rest of the board fills with standard jobs.
+    for (let i = 0; i < 10; i++) tickJobGeneration();
+    const ferries = db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
+      .all();
+    expect(ferries.length).toBe(4);
+  });
+
+  it("refills ferries back to the floor after some are removed", () => {
+    for (let i = 0; i < 10; i++) tickJobGeneration();
+    // Drop the board's ferries to simulate the player accepting / them expiring.
+    db.update(jobs)
+      .set({ status: "completed" })
+      .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
+      .run();
+    const afterDrain = db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
+      .all();
+    expect(afterDrain.length).toBe(0);
+
+    // The floor is topped up gradually (capped per tick), so give it a few ticks.
+    for (let i = 0; i < 5; i++) tickJobGeneration();
+    const refilled = db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
+      .all();
+    expect(refilled.length).toBe(4);
   });
 });
 

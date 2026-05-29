@@ -11,7 +11,11 @@ const atlanticForestry: ClientDefinition = {
   seasonalMultipliers: [
     0.2, 0.2, 0.4, 0.7, 0.9, 1.2, 1.4, 1.4, 1.1, 0.8, 0.4, 0.3,
   ],
-  reputationGateMin: 10,
+  // Gate-0 so a brand-new SEP pilot has a second branded bush client beyond
+  // Maritime Cargo (its standard template is SEP survey work). Volume is still
+  // throttled by the steep seasonal curve above — quiet in winter, ramping
+  // through summer — so this adds early variety without flooding the board.
+  reputationGateMin: 0,
   reputationGateMax: 60,
   standardTemplates: [
     {
