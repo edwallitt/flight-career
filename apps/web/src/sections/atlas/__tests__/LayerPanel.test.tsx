@@ -52,19 +52,30 @@ function renderPanel(
 }
 
 describe("LayerPanel — rendering", () => {
-  it("renders all five presets", () => {
+  it("renders the primary job-picking rows", () => {
     renderPanel();
-    for (const label of ["ALL", "OPS", "FLEET", "JOBS", "FUEL"]) {
-      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
-    }
+    expect(screen.getByRole("button", { name: /Open jobs/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Reachable range/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /My position/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Live track/i })).toBeNull();
   });
 
-  it("renders the standard six layer rows by default, hiding Live track", () => {
+  it("keeps secondary layers available under 'More layers'", () => {
     renderPanel();
+    // Collapsed by default, but the toggles are still in the DOM.
+    expect(screen.getByText(/More layers/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Airports/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /My fleet/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Open jobs/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Live track/i })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /Recent flights/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Night shade/i }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces the Live track row only when hasTrackedFlight is true", () => {
@@ -90,21 +101,17 @@ describe("LayerPanel — interactions", () => {
     expect(onChange).toHaveBeenCalledWith({ ...ALL_OFF, airports: true });
   });
 
-  it("clicking a preset replaces the entire layer set with that preset's config", async () => {
+  it("'Reachable range' toggles both range rings and reachability dim together", async () => {
     const onChange = vi.fn();
     renderPanel({ onChange });
-    await userEvent.setup().click(screen.getByRole("button", { name: "FUEL" }));
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        airports: true,
-        fuelPrices: true,
-        ownedAircraft: false,
-        recentFlights: false,
-        jobs: false,
-        playerLocation: true,
-        trackedFlight: true,
-      }),
-    );
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /Reachable range/i }));
+    expect(onChange).toHaveBeenCalledWith({
+      ...ALL_OFF,
+      rangeRings: true,
+      reachabilityDim: true,
+    });
   });
 });
 

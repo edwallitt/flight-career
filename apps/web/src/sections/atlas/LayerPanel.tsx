@@ -16,7 +16,7 @@ interface LayerPanelProps {
   fuelOverlayType?: "avgas" | "jet-a";
   fuelOverlayRange?: FuelPriceRange | null;
   // True only while an in_progress MSFS-tracked flight exists. The Live Track
-  // row + preset chip are hidden otherwise to keep the panel quiet.
+  // row is hidden otherwise to keep the panel quiet.
   hasTrackedFlight?: boolean;
   // When non-null, the range rings drive off this aircraft. We surface its
   // tail + range in a small footnote so the player understands *why* a given
@@ -31,122 +31,6 @@ interface LayerPanelProps {
 
 function formatPriceCents(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
-}
-
-interface RowDef {
-  key: keyof AtlasLayerSet;
-  label: string;
-  count?: number;
-  swatch: React.ReactNode;
-}
-
-// Layer presets — one-click "doctrine" chips. The user can still toggle
-// individual layers afterwards, but presets get them somewhere useful fast.
-// Presets always leave `trackedFlight: true` — when no active tracked flight
-// exists, the layer is a no-op; when one does, every preset should show it
-// by default (it's the highest-signal layer at that moment).
-const PRESETS: { id: string; label: string; layers: AtlasLayerSet }[] = [
-  {
-    id: "all",
-    label: "ALL",
-    layers: {
-      airports: true,
-      fuelPrices: false,
-      ownedAircraft: true,
-      recentFlights: true,
-      jobs: true,
-      playerLocation: true,
-      trackedFlight: true,
-      rangeRings: true,
-      reachabilityDim: true,
-      nightShade: true,
-    },
-  },
-  {
-    id: "ops",
-    label: "OPS",
-    layers: {
-      airports: true,
-      fuelPrices: false,
-      ownedAircraft: true,
-      recentFlights: true,
-      jobs: false,
-      playerLocation: true,
-      trackedFlight: true,
-      rangeRings: true,
-      reachabilityDim: true,
-      nightShade: true,
-    },
-  },
-  {
-    id: "fleet",
-    label: "FLEET",
-    layers: {
-      airports: true,
-      fuelPrices: false,
-      ownedAircraft: true,
-      recentFlights: false,
-      jobs: false,
-      playerLocation: true,
-      trackedFlight: true,
-      rangeRings: true,
-      reachabilityDim: true,
-      nightShade: true,
-    },
-  },
-  {
-    id: "jobs",
-    label: "JOBS",
-    layers: {
-      airports: true,
-      fuelPrices: false,
-      ownedAircraft: false,
-      recentFlights: false,
-      jobs: true,
-      playerLocation: true,
-      trackedFlight: true,
-      rangeRings: true,
-      reachabilityDim: true,
-      nightShade: true,
-    },
-  },
-  {
-    id: "fuel",
-    label: "FUEL",
-    layers: {
-      airports: true,
-      fuelPrices: true,
-      ownedAircraft: false,
-      recentFlights: false,
-      jobs: false,
-      playerLocation: true,
-      trackedFlight: true,
-      // Fuel inspection is the one preset that intentionally drops the dim:
-      // the player wants a clean look at every airport's price, regardless
-      // of whether they can fly there from current position.
-      rangeRings: false,
-      reachabilityDim: false,
-      // Fuel mode keeps night shade off so the gradient reads cleanly
-      // across all longitudes — the price-color encoding is the headline
-      // here and shouldn't compete with a dim overlay.
-      nightShade: false,
-    },
-  },
-];
-
-function shallowEq(a: AtlasLayerSet, b: AtlasLayerSet): boolean {
-  return (
-    a.airports === b.airports &&
-    a.fuelPrices === b.fuelPrices &&
-    a.ownedAircraft === b.ownedAircraft &&
-    a.recentFlights === b.recentFlights &&
-    a.jobs === b.jobs &&
-    a.playerLocation === b.playerLocation &&
-    a.trackedFlight === b.trackedFlight &&
-    a.rangeRings === b.rangeRings &&
-    a.reachabilityDim === b.reachabilityDim &&
-    a.nightShade === b.nightShade
-  );
 }
 
 function ToggleRow({
@@ -222,30 +106,39 @@ function ToggleRow({
   );
 }
 
-function PresetChip({
-  active,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "rounded-sm border px-2 py-1 font-mono text-[10px] uppercase tracking-callsign transition-colors",
-        active
-          ? "border-amber-deep bg-amber-glow/[0.10] text-amber-glow shadow-[0_0_8px_rgba(212,165,116,0.18)]"
-          : "border-ink-600 bg-ink-750 text-muted hover:border-amber-deep/60 hover:text-amber-glow",
-      ].join(" ")}
-    >
-      {label}
-    </button>
-  );
-}
+// Swatches reused by both the primary rows and the "More layers" disclosure.
+const SWATCH = {
+  jobs: <span className="text-amber-glow text-[10px]">▲</span>,
+  playerLocation: (
+    <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(94,196,124,0.7)]" />
+  ),
+  // Two concentric arcs — same idiom the map uses for range rings.
+  reach: (
+    <span className="relative block h-3 w-3">
+      <span className="absolute inset-0 rounded-full border border-amber-deep/80" />
+      <span className="absolute inset-[3px] rounded-full border border-dashed border-amber-deep/60" />
+    </span>
+  ),
+  trackedFlight: (
+    <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(94,196,124,0.8)]" />
+  ),
+  airports: (
+    <span className="h-2 w-2 rounded-full border border-amber-deep bg-amber-glow/40" />
+  ),
+  ownedAircraft: <span className="text-amber-glow text-[11px]">✈</span>,
+  recentFlights: (
+    <span className="block h-px w-3 border-t border-dashed border-amber-deep" />
+  ),
+  fuelPrices: (
+    <span className="h-2 w-3 rounded-sm bg-gradient-to-r from-emerald-400 via-amber-glow to-rose-400" />
+  ),
+  nightShade: (
+    <span className="flex h-3 w-3 overflow-hidden rounded-full border border-amber-deep/60">
+      <span className="h-full w-1/2 bg-amber-glow/40" />
+      <span className="h-full w-1/2 bg-[#0b1a2a]" />
+    </span>
+  ),
+} as const;
 
 export function LayerPanel({
   layers,
@@ -258,131 +151,99 @@ export function LayerPanel({
 }: LayerPanelProps) {
   const toggle = (key: keyof AtlasLayerSet) =>
     onChange({ ...layers, [key]: !layers[key] });
-  const activePreset = PRESETS.find((p) => shallowEq(p.layers, layers));
 
-  const rows: RowDef[] = [
-    {
-      key: "airports",
-      label: "Airports",
-      count: counts.airports,
-      swatch: (
-        <span className="h-2 w-2 rounded-full border border-amber-deep bg-amber-glow/40" />
-      ),
-    },
-    {
-      key: "fuelPrices",
-      label: "Fuel overlay",
-      swatch: (
-        <span className="h-2 w-3 rounded-sm bg-gradient-to-r from-emerald-400 via-amber-glow to-rose-400" />
-      ),
-    },
-    {
-      key: "ownedAircraft",
-      label: "My fleet",
-      count: counts.ownedAircraft,
-      swatch: <span className="text-amber-glow text-[11px]">✈</span>,
-    },
-    {
-      key: "recentFlights",
-      label: "Recent flights",
-      count: counts.recentFlights,
-      swatch: (
-        <span className="block h-px w-3 border-t border-dashed border-amber-deep" />
-      ),
-    },
-    {
-      key: "jobs",
-      label: "Open jobs",
-      count: counts.jobs,
-      swatch: <span className="text-amber-glow text-[10px]">▲</span>,
-    },
-    {
-      key: "playerLocation",
-      label: "My position",
-      count: counts.player,
-      swatch: (
-        <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_4px_rgba(94,196,124,0.7)]" />
-      ),
-    },
-    {
-      key: "rangeRings",
-      label: "Range rings",
-      swatch: (
-        // Two concentric arcs — same idiom the map uses.
-        <span className="relative block h-3 w-3">
-          <span className="absolute inset-0 rounded-full border border-amber-deep/80" />
-          <span className="absolute inset-[3px] rounded-full border border-dashed border-amber-deep/60" />
-        </span>
-      ),
-    },
-    {
-      key: "reachabilityDim",
-      label: "Dim out of range",
-      swatch: (
-        <span className="flex h-3 w-3 items-center justify-center gap-px">
-          <span className="h-2 w-1 rounded-sm bg-amber-glow" />
-          <span className="h-2 w-1 rounded-sm bg-amber-glow/20" />
-        </span>
-      ),
-    },
-    {
-      key: "nightShade",
-      label: "Night shade",
-      // Half-light, half-dark swatch — reads instantly as "day/night."
-      swatch: (
-        <span className="flex h-3 w-3 overflow-hidden rounded-full border border-amber-deep/60">
-          <span className="h-full w-1/2 bg-amber-glow/40" />
-          <span className="h-full w-1/2 bg-[#0b1a2a]" />
-        </span>
-      ),
-    },
-  ];
-
-  // Surface the live-track row only when a tracked flight is actually in
-  // progress. Players in manual mode (or with no active flight) never see it.
-  if (hasTrackedFlight) {
-    rows.push({
-      key: "trackedFlight",
-      label: "Live track",
-      swatch: (
-        <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(94,196,124,0.8)]" />
-      ),
-    });
-  }
+  // Range rings + reachability dim are two halves of one idea ("what can I
+  // reach right now"), so the panel drives them with a single switch. We
+  // read the on-state from rangeRings and mirror both on toggle.
+  const reachOn = layers.rangeRings;
+  const toggleReach = () =>
+    onChange({ ...layers, rangeRings: !reachOn, reachabilityDim: !reachOn });
 
   return (
     <div className="flex flex-col">
-      {/* Doctrine presets */}
-      <div className="px-4 pt-4 pb-3">
-        <div className="mb-2.5 label">Doctrine</div>
-        <div className="grid grid-cols-3 gap-1">
-          {PRESETS.map((p) => (
-            <PresetChip
-              key={p.id}
-              label={p.label}
-              active={activePreset?.id === p.id}
-              onClick={() => onChange(p.layers)}
+      {/* Primary layers — the few that serve "which job next." */}
+      <div className="px-3 pt-4 pb-3">
+        <div className="mb-1.5 px-1 label">Layers</div>
+        <div className="flex flex-col gap-0.5">
+          <ToggleRow
+            on={layers.jobs}
+            onClick={() => toggle("jobs")}
+            label="Open jobs"
+            count={counts.jobs}
+            swatch={SWATCH.jobs}
+          />
+          <ToggleRow
+            on={reachOn}
+            onClick={toggleReach}
+            label="Reachable range"
+            swatch={SWATCH.reach}
+          />
+          <ToggleRow
+            on={layers.playerLocation}
+            onClick={() => toggle("playerLocation")}
+            label="My position"
+            count={counts.player}
+            swatch={SWATCH.playerLocation}
+          />
+          {/* Live track only appears while a tracked flight is in progress —
+              it's the highest-signal layer at that moment, so it stays in
+              the primary group rather than the disclosure. */}
+          {hasTrackedFlight && (
+            <ToggleRow
+              on={layers.trackedFlight}
+              onClick={() => toggle("trackedFlight")}
+              label="Live track"
+              swatch={SWATCH.trackedFlight}
             />
-          ))}
+          )}
         </div>
       </div>
 
-      {/* Layer rows — quiet style, no row borders */}
-      <div className="px-3 pt-2 pb-3">
-        <div className="mb-1.5 px-1 label">Layers</div>
-        <div className="flex flex-col gap-0.5">
-          {rows.map((r) => (
-            <ToggleRow
-              key={r.key}
-              on={layers[r.key]}
-              onClick={() => toggle(r.key)}
-              label={r.label}
-              count={r.count}
-              swatch={r.swatch}
-            />
-          ))}
+      {/* More layers — context/decoration, collapsed by default so the panel
+          stays focused on jobs. */}
+      <details className="group border-t border-ink-600/70 px-3 py-3 [&_summary::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-1 font-mono text-micro uppercase tracking-callsign text-muted-faint hover:text-muted">
+          <span>More layers</span>
+          <span className="text-[10px] transition-transform group-open:rotate-90">
+            ▸
+          </span>
+        </summary>
+        <div className="mt-2 flex flex-col gap-0.5">
+          <ToggleRow
+            on={layers.airports}
+            onClick={() => toggle("airports")}
+            label="Airports"
+            count={counts.airports}
+            swatch={SWATCH.airports}
+          />
+          <ToggleRow
+            on={layers.ownedAircraft}
+            onClick={() => toggle("ownedAircraft")}
+            label="My fleet"
+            count={counts.ownedAircraft}
+            swatch={SWATCH.ownedAircraft}
+          />
+          <ToggleRow
+            on={layers.recentFlights}
+            onClick={() => toggle("recentFlights")}
+            label="Recent flights"
+            count={counts.recentFlights}
+            swatch={SWATCH.recentFlights}
+          />
+          <ToggleRow
+            on={layers.fuelPrices}
+            onClick={() => toggle("fuelPrices")}
+            label="Fuel overlay"
+            swatch={SWATCH.fuelPrices}
+          />
+          <ToggleRow
+            on={layers.nightShade}
+            onClick={() => toggle("nightShade")}
+            label="Night shade"
+            swatch={SWATCH.nightShade}
+          />
         </div>
-      </div>
+      </details>
 
       {layers.fuelPrices && fuelOverlayType && (
         <div className="border-t border-ink-600/70 px-4 py-3">

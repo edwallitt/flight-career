@@ -19,17 +19,8 @@ import { FuelSparkline } from "./FuelSparkline.js";
 interface FeatureDrawerProps {
   feature: AtlasFeatureRef | null;
   data: AtlasData | null;
-  // Current override (if any) so the per-feature button can flip to
-  // "Clear planning anchor" when it would otherwise be a no-op repeat.
-  activeOverride:
-    | { type: "airport"; icao: string }
-    | { type: "aircraft"; id: number }
-    | null;
   onClose: () => void;
   onNavigate: (path: string) => void;
-  onSetAirportAnchor: (icao: string) => void;
-  onSetAircraftAnchor: (id: number) => void;
-  onClearAnchor: () => void;
 }
 
 function CloseIcon() {
@@ -108,16 +99,10 @@ function AirportDrawer({
   airport,
   data,
   onNavigate,
-  isAnchored,
-  onSetAnchor,
-  onClearAnchor,
 }: {
   airport: AtlasAirport;
   data: AtlasData;
   onNavigate: (path: string) => void;
-  isAnchored: boolean;
-  onSetAnchor: () => void;
-  onClearAnchor: () => void;
 }) {
   const isHere = data.player?.currentLocationIcao === airport.icao;
   const ownedHere = data.ownedAircraft.filter(
@@ -245,19 +230,6 @@ function AirportDrawer({
         <PrimaryAction
           label="Travel here"
           onClick={() => onNavigate(`/jobs?travelTo=${airport.icao}`)}
-        />
-      )}
-      {/* Planning-only affordance: clicking toggles a hypothetical "what
-          would my best aircraft reach from here" overlay. Distinct from
-          "Travel here" — the player isn't committing to anything, just
-          exploring. Suppressed at the home field because rings there are
-          already the default. */}
-      {!isHere && (
-        <SecondaryAction
-          label={
-            isAnchored ? "Clear planning anchor" : `Plan from ${airport.icao}`
-          }
-          onClick={isAnchored ? onClearAnchor : onSetAnchor}
         />
       )}
     </div>
@@ -526,16 +498,10 @@ function AircraftDrawer({
   aircraft,
   data,
   onNavigate,
-  isAnchored,
-  onSetAnchor,
-  onClearAnchor,
 }: {
   aircraft: AtlasOwnedAircraft;
   data: AtlasData;
   onNavigate: (path: string) => void;
-  isAnchored: boolean;
-  onSetAnchor: () => void;
-  onClearAnchor: () => void;
 }) {
   const remaining = Math.max(
     0,
@@ -674,18 +640,6 @@ function AircraftDrawer({
       <PrimaryAction
         label="View in Hangar"
         onClick={() => onNavigate(`/hangar?id=${aircraft.id}`)}
-      />
-      {/* Lets the player ask "what could this specific aircraft reach from
-          where it sits?" — anchoring on the aircraft pins both the rings'
-          range and origin to it, which is different from the default
-          rule of "best aircraft at the player's airport." */}
-      <SecondaryAction
-        label={
-          isAnchored
-            ? "Clear planning anchor"
-            : `Plan with ${aircraft.tailNumber}`
-        }
-        onClick={isAnchored ? onClearAnchor : onSetAnchor}
       />
     </div>
   );
@@ -1034,12 +988,8 @@ function resolveTitle(
 export function FeatureDrawer({
   feature,
   data,
-  activeOverride,
   onClose,
   onNavigate,
-  onSetAirportAnchor,
-  onSetAircraftAnchor,
-  onClearAnchor,
 }: FeatureDrawerProps) {
   const open = feature != null && data != null;
   const title = open ? resolveTitle(feature, data) : null;
@@ -1050,37 +1000,15 @@ export function FeatureDrawer({
       case "airport": {
         const a = data.airports.find((x) => x.icao === feature.icao);
         if (a) {
-          const isAnchored =
-            activeOverride?.type === "airport" &&
-            activeOverride.icao === a.icao;
-          body = (
-            <AirportDrawer
-              airport={a}
-              data={data}
-              onNavigate={onNavigate}
-              isAnchored={isAnchored}
-              onSetAnchor={() => onSetAirportAnchor(a.icao)}
-              onClearAnchor={onClearAnchor}
-            />
-          );
+          body = <AirportDrawer airport={a} data={data} onNavigate={onNavigate} />;
         }
         break;
       }
       case "aircraft": {
         const a = data.ownedAircraft.find((x) => x.id === feature.id);
         if (a) {
-          const isAnchored =
-            activeOverride?.type === "aircraft" &&
-            activeOverride.id === a.id;
           body = (
-            <AircraftDrawer
-              aircraft={a}
-              data={data}
-              onNavigate={onNavigate}
-              isAnchored={isAnchored}
-              onSetAnchor={() => onSetAircraftAnchor(a.id)}
-              onClearAnchor={onClearAnchor}
-            />
+            <AircraftDrawer aircraft={a} data={data} onNavigate={onNavigate} />
           );
         }
         break;
