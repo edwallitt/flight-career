@@ -16,13 +16,11 @@ interface JobsFilterPanelProps {
   totalJobs: number;
   recentFlightsAutoDisabled: boolean;
   onUndoAutoDisable: () => void;
-  // Color encoding for job lines. Three modes — see AtlasJobColorBy. Fit
-  // is computed against the player's *actual* position regardless of any
-  // planning override, so we surface a warning when both are active.
+  // Color encoding for job lines. FIT ("can I fly it") or $/NM ("is it
+  // worth it") — the two questions that drive picking a job.
   colorBy: AtlasJobColorBy;
   onColorByChange: (next: AtlasJobColorBy) => void;
   fitDataLoading: boolean;
-  isPlanningOverride: boolean;
 }
 
 function ColorByChip({
@@ -147,7 +145,6 @@ export function JobsFilterPanel({
   colorBy,
   onColorByChange,
   fitDataLoading,
-  isPlanningOverride,
 }: JobsFilterPanelProps) {
   const toggleClass = (c: AtlasJobClassFilter) => {
     if (c === "any") {
@@ -192,7 +189,7 @@ export function JobsFilterPanel({
           )}
         </div>
         <div className="flex gap-1">
-          {(["role", "fit", "rate"] as const).map((mode) => (
+          {(["fit", "rate"] as const).map((mode) => (
             <ColorByChip
               key={mode}
               label={mode === "rate" ? "$ / NM" : mode.toUpperCase()}
@@ -201,15 +198,6 @@ export function JobsFilterPanel({
             />
           ))}
         </div>
-        {colorBy === "fit" && isPlanningOverride && (
-          // The advisor flagged this correctness boundary: fit colors are
-          // always computed from where the player *actually* is, not the
-          // planning override. The chip tells the player so they don't
-          // assume "ready" means "ready from CYHZ."
-          <div className="mt-2 rounded-sm border border-amber-deep/40 bg-amber-glow/[0.05] px-2 py-1 font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
-            Fit reflects your actual position
-          </div>
-        )}
       </div>
 
       <div className="flex items-baseline justify-between">

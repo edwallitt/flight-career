@@ -22,6 +22,7 @@ describe("AtlasLegend", () => {
     const { container } = render(
       <AtlasLegend
         layers={ALL_OFF}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -37,6 +38,7 @@ describe("AtlasLegend", () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, jobs: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -52,6 +54,7 @@ describe("AtlasLegend", () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, jobs: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -68,10 +71,32 @@ describe("AtlasLegend", () => {
     expect(screen.queryByText("Ferry")).toBeNull();
   });
 
+  it("describes the fit encoding when colorBy is fit (the default view)", async () => {
+    render(
+      <AtlasLegend
+        layers={{ ...ALL_OFF, jobs: true }}
+        jobColorBy="fit"
+        fuelOverlayType="jet-a"
+        fuelOverlayRange={null}
+        hasTrackedFlight={false}
+        hasFerryJobs={false}
+      />,
+    );
+    await userEvent.setup().click(screen.getByRole("button", { name: /Legend/i }));
+    expect(screen.getByText(/Jobs · by fit/i)).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("Reposition")).toBeInTheDocument();
+    expect(screen.getByText("Won't fit")).toBeInTheDocument();
+    expect(screen.getByText("Locked")).toBeInTheDocument();
+    // Role rows should not appear in fit mode.
+    expect(screen.queryByText("Bush")).toBeNull();
+  });
+
   it("shows the ferry row only when ferry jobs are visible on the board", async () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, jobs: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -86,6 +111,7 @@ describe("AtlasLegend", () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, fuelPrices: true }}
+        jobColorBy="role"
         fuelOverlayType="avgas"
         fuelOverlayRange={{ lo: 4.2, mid: 5.5, hi: 6.8 }}
         hasTrackedFlight={false}
@@ -103,6 +129,7 @@ describe("AtlasLegend", () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, fuelPrices: true, jobs: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -120,6 +147,7 @@ describe("AtlasLegend", () => {
     const { rerender } = render(
       <AtlasLegend
         layers={{ ...ALL_OFF, trackedFlight: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}
@@ -133,6 +161,7 @@ describe("AtlasLegend", () => {
     rerender(
       <AtlasLegend
         layers={{ ...ALL_OFF, trackedFlight: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight
@@ -147,6 +176,7 @@ describe("AtlasLegend", () => {
     render(
       <AtlasLegend
         layers={{ ...ALL_OFF, ownedAircraft: true }}
+        jobColorBy="role"
         fuelOverlayType="jet-a"
         fuelOverlayRange={null}
         hasTrackedFlight={false}

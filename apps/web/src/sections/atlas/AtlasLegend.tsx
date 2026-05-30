@@ -1,10 +1,13 @@
 import { useId, useMemo, useState } from "react";
 import {
   FERRY_LINE_COLOR,
+  FIT_COLOR,
   FUEL_PRICE_GRADIENT,
+  RATE_GRADIENT,
   ROLE_COLOR,
   STATUS_COLOR,
   URGENCY_LINE_STYLE,
+  type AtlasJobColorBy,
   type AtlasLayerSet,
   type FuelPriceRange,
 } from "../../components/map/AtlasMap.js";
@@ -19,12 +22,16 @@ import {
 
 export function AtlasLegend({
   layers,
+  jobColorBy,
   fuelOverlayType,
   fuelOverlayRange,
   hasTrackedFlight,
   hasFerryJobs,
 }: {
   layers: AtlasLayerSet;
+  // Which encoding the job lines currently use, so the jobs legend describes
+  // the colors actually on the map (defaults to fit — the headline view).
+  jobColorBy: AtlasJobColorBy;
   fuelOverlayType: "avgas" | "jet-a";
   fuelOverlayRange: FuelPriceRange | null;
   hasTrackedFlight: boolean;
@@ -83,7 +90,9 @@ export function AtlasLegend({
       </div>
 
       <div className="flex flex-col">
-        {sectionFlags.jobs && <JobsSection hasFerry={hasFerryJobs} />}
+        {sectionFlags.jobs && (
+          <JobsSection colorBy={jobColorBy} hasFerry={hasFerryJobs} />
+        )}
         {sectionFlags.fuel && fuelOverlayRange && (
           <FuelSection
             range={fuelOverlayRange}
@@ -151,13 +160,62 @@ function ColorBar({ color, dash }: { color: string; dash?: string }) {
   );
 }
 
-function JobsSection({ hasFerry }: { hasFerry: boolean }) {
+// The job-line color encoding the player picked in the filter panel. The
+// legend's lead block mirrors it so "what do these colors mean" always has
+// an answer for the mode actually on the map.
+function JobColorKey({ colorBy }: { colorBy: AtlasJobColorBy }) {
+  if (colorBy === "fit") {
+    return (
+      <>
+        <SwatchRow swatch={<ColorBar color={FIT_COLOR.ready} dash="3 2" />} label="Ready" sub="fly now" />
+        <SwatchRow swatch={<ColorBar color={FIT_COLOR.reposition} dash="3 2" />} label="Reposition" sub="travel first" />
+        <SwatchRow swatch={<ColorBar color={FIT_COLOR.wont_fit} dash="3 2" />} label="Won't fit" sub="range / class" />
+        <SwatchRow swatch={<ColorBar color={FIT_COLOR.locked} dash="3 2" />} label="Locked" sub="rep / rating" />
+      </>
+    );
+  }
+  if (colorBy === "rate") {
+    const gradient = `linear-gradient(to right, ${RATE_GRADIENT.worst}, ${RATE_GRADIENT.mid}, ${RATE_GRADIENT.best})`;
+    return (
+      <>
+        <div
+          className="h-2 w-full rounded-sm"
+          style={{ backgroundImage: gradient }}
+          aria-label="Pay rate gradient: low $/nm (dim) to high $/nm (green)"
+        />
+        <div className="flex justify-between text-[10px] text-muted">
+          <span>Low $/nm</span>
+          <span>High $/nm</span>
+        </div>
+      </>
+    );
+  }
   return (
-    <Section title="Jobs · by role">
+    <>
       <SwatchRow swatch={<ColorBar color={ROLE_COLOR.bush} dash="3 2" />} label="Bush" />
       <SwatchRow swatch={<ColorBar color={ROLE_COLOR.air_taxi} dash="3 2" />} label="Air taxi" />
       <SwatchRow swatch={<ColorBar color={ROLE_COLOR.light_jet} dash="3 2" />} label="Light jet" />
       <SwatchRow swatch={<ColorBar color={ROLE_COLOR.open} dash="3 2" />} label="Open market" />
+    </>
+  );
+}
+
+const JOB_COLOR_TITLE: Record<AtlasJobColorBy, string> = {
+  fit: "Jobs · by fit",
+  rate: "Jobs · by $/nm",
+  role: "Jobs · by role",
+};
+
+function JobsSection({
+  colorBy,
+  hasFerry,
+}: {
+  colorBy: AtlasJobColorBy;
+  hasFerry: boolean;
+}) {
+  return (
+    <Section title={JOB_COLOR_TITLE[colorBy]}>
+      <JobColorKey colorBy={colorBy} />
       {hasFerry && (
         <SwatchRow
           swatch={<ColorBar color={FERRY_LINE_COLOR} dash="5 3" />}

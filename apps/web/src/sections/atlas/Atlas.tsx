@@ -21,19 +21,24 @@ import { JobsFilterPanel } from "./JobsFilterPanel.js";
 import { SearchBox, type AtlasSearchHit } from "./SearchBox.js";
 
 const DEFAULT_LAYERS: AtlasLayerSet = {
+  // Jobs are the spine of this page — it opens on "here are the jobs you
+  // could take." Airports + fleet stay on as context (job origins / where
+  // your aircraft sit); their toggles live in the "More layers" disclosure.
   airports: true,
   fuelPrices: false,
   ownedAircraft: true,
-  recentFlights: true,
-  jobs: false,
+  // Recent flights and night shade are decoration for job-picking — off by
+  // default so they don't compete with the job lines. Re-enable via the
+  // layer panel.
+  recentFlights: false,
+  jobs: true,
   playerLocation: true,
   trackedFlight: true,
-  // Range rings + dim are on by default — they're the headline change that
-  // turns the atlas from inventory into a planning tool. Players who want a
-  // neutral map can drop both via the layer panel.
+  // Range rings + dim answer "what can I reach" — driven by a single
+  // "Reachable range" toggle in the panel.
   rangeRings: true,
   reachabilityDim: true,
-  nightShade: true,
+  nightShade: false,
 };
 
 const DEFAULT_JOB_FILTERS: AtlasJobFilters = {
@@ -60,7 +65,10 @@ export function Atlas() {
   const [layers, setLayers] = useState<AtlasLayerSet>(DEFAULT_LAYERS);
   const [jobFilters, setJobFilters] =
     useState<AtlasJobFilters>(DEFAULT_JOB_FILTERS);
-  const [jobColorBy, setJobColorBy] = useState<AtlasJobColorBy>("role");
+  // Default to "fit" — the gating question for picking a job is "can I
+  // actually fly it from where I am?" $/NM ("is it worth it") is the one
+  // alternative encoding offered.
+  const [jobColorBy, setJobColorBy] = useState<AtlasJobColorBy>("fit");
 
   // Fit data is only fetched when actually needed (color-by=fit AND jobs
   // layer on). The query is cheap server-side but adds an extra refetch
@@ -202,63 +210,12 @@ export function Atlas() {
     [data, fuelOverlayType],
   );
 
-  // Planning override: the player can pin the range overlay to a different
-  // location ("if I were at CYHZ…") or aircraft ("if I dispatched my
-  // Bonanza…"). Two distinct overrides because the hypothetical question
-  // and its answer are different — an airport override needs an aircraft
-  // to source range from, while an aircraft override implies its current
-  // location. Cleared by the chip on the map. Persists across data
-  // refetches but not across full reloads — this is a working surface,
-  // not a saved view.
-  const [anchorOverride, setAnchorOverride] = useState<
-    | { type: "airport"; icao: string }
-    | { type: "aircraft"; id: number }
-    | null
-  >(null);
-
-  // Range anchor: derived from override (when set) or the default rule —
-  // longest-range *available* aircraft sitting at the player's airport. An
-  // aircraft in maintenance / in-flight / committed can't be dispatched
-  // right now, so its range would be misleading. If neither produces a
-  // valid anchor the rings disappear and dim is suppressed.
+  // Range anchor: the longest-range *available* aircraft sitting at the
+  // player's airport. An aircraft in maintenance / in-flight / committed
+  // can't be dispatched right now, so its range would be misleading. If no
+  // eligible aircraft exists the rings disappear and dim is suppressed.
   const rangeAnchor: AtlasRangeAnchor | null = useMemo(() => {
     if (!data) return null;
-
-    if (anchorOverride?.type === "aircraft") {
-      const ac = data.ownedAircraft.find((a) => a.id === anchorOverride.id);
-      if (!ac) return null;
-      return {
-        lat: ac.lat,
-        lon: ac.lon,
-        rangeNm: ac.rangeNm,
-        cruiseSpeedKts: ac.cruiseSpeedKts,
-        tailNumber: ac.tailNumber,
-        aircraftTypeLabel: ac.aircraftTypeLabel,
-        isOverride: true,
-      };
-    }
-    if (anchorOverride?.type === "airport") {
-      // Planning from a hypothetical airport: project the *best owned
-      // aircraft anywhere in the fleet* onto that airport. We deliberately
-      // drop the "available / at player loc" filter — the question being
-      // asked is structural ("what could this airport reach with my best
-      // plane?") rather than operational ("what can I dispatch right now?").
-      const ap = data.airports.find((a) => a.icao === anchorOverride.icao);
-      if (!ap || data.ownedAircraft.length === 0) return null;
-      const best = data.ownedAircraft.reduce((a, b) =>
-        b.rangeNm > a.rangeNm ? b : a,
-      );
-      return {
-        lat: ap.lat,
-        lon: ap.lon,
-        rangeNm: best.rangeNm,
-        cruiseSpeedKts: best.cruiseSpeedKts,
-        tailNumber: best.tailNumber,
-        aircraftTypeLabel: best.aircraftTypeLabel,
-        isOverride: true,
-      };
-    }
-
     if (!data.player) return null;
     const here = data.ownedAircraft.filter(
       (a) =>
@@ -275,29 +232,7 @@ export function Atlas() {
       tailNumber: best.tailNumber,
       aircraftTypeLabel: best.aircraftTypeLabel,
     };
-  }, [data, anchorOverride]);
-
-  // Chip label for the override banner. Centralized so the chip + drawer
-  // wording stay synchronized — "Planning from CYHZ" must match the
-  // mental model of the click that produced it.
-  const overrideLabel = useMemo<string | null>(() => {
-    if (!anchorOverride || !data) return null;
-    if (anchorOverride.type === "airport") {
-      return `Planning from ${anchorOverride.icao}`;
-    }
-    const ac = data.ownedAircraft.find((a) => a.id === anchorOverride.id);
-    return ac ? `Planning with ${ac.tailNumber}` : "Planning override";
-  }, [anchorOverride, data]);
-
-  const setAirportAnchor = useCallback((icao: string) => {
-    setAnchorOverride({ type: "airport", icao });
-  }, []);
-  const setAircraftAnchor = useCallback((id: number) => {
-    setAnchorOverride({ type: "aircraft", id });
-  }, []);
-  const clearAnchorOverride = useCallback(() => {
-    setAnchorOverride(null);
-  }, []);
+  }, [data]);
 
   const handleFilteredJobsChange = useCallback((n: number) => {
     setVisibleJobsCount(n);
@@ -372,7 +307,6 @@ export function Atlas() {
               fitDataLoading={
                 jobColorBy === "fit" && fitQuery.isPending
               }
-              isPlanningOverride={anchorOverride != null}
             />
           )}
         </div>
@@ -394,36 +328,6 @@ export function Atlas() {
               jobFitById={jobFitById}
             />
           )}
-          {/* Override chip — surfaces the active planning anchor and offers
-              a one-click clear. Sits at the top-center of the map so it
-              doesn't fight the OPS badge (top-left) or the layer tally
-              (top-right). pointer-events-auto on the inner element only,
-              so the chip itself is interactive but the strip around it
-              still lets map drag pass through. */}
-          {data && overrideLabel && (
-            <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2">
-              <div className="pointer-events-auto inline-flex items-center gap-2 rounded-sm border border-amber-deep/60 bg-amber-glow/[0.10] px-3 py-1 font-mono text-[10px] uppercase tracking-callsign text-amber-glow backdrop-blur-sm">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-glow shadow-[0_0_5px_rgba(212,165,116,0.7)]" />
-                {overrideLabel}
-                {rangeAnchor && (
-                  <span className="text-muted-faint">
-                    · {rangeAnchor.tailNumber} ·{" "}
-                    <span className="tabular-nums text-amber-warm">
-                      {rangeAnchor.rangeNm.toLocaleString()} nm
-                    </span>
-                  </span>
-                )}
-                <button
-                  type="button"
-                  aria-label="Clear planning anchor"
-                  onClick={clearAnchorOverride}
-                  className="ml-1 rounded-sm border border-amber-deep/60 px-1 text-amber-glow hover:bg-amber-glow/[0.15]"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-          )}
           {!data && (
             <div className="absolute inset-0 flex items-center justify-center font-mono text-micro uppercase tracking-callsign text-muted-dim">
               {dataQuery.isError ? "Failed to load atlas" : "Loading atlas…"}
@@ -437,6 +341,7 @@ export function Atlas() {
             <div className="pointer-events-none absolute bottom-14 left-4 z-10">
               <AtlasLegend
                 layers={layers}
+                jobColorBy={jobColorBy}
                 fuelOverlayType={fuelOverlayType}
                 fuelOverlayRange={fuelOverlayRange}
                 hasTrackedFlight={activeTracked != null}
@@ -449,15 +354,11 @@ export function Atlas() {
         <FeatureDrawer
           feature={selected}
           data={data}
-          activeOverride={anchorOverride}
           onClose={() => setSelected(null)}
           onNavigate={(path) => {
             setSelected(null);
             navigate(path);
           }}
-          onSetAirportAnchor={setAirportAnchor}
-          onSetAircraftAnchor={setAircraftAnchor}
-          onClearAnchor={clearAnchorOverride}
         />
       </div>
     </div>
