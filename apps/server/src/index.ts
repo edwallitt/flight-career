@@ -14,19 +14,15 @@ try {
 
 import { serve } from "@hono/node-server";
 import { trpcServer } from "@hono/trpc-server";
-import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { db } from "./db/client.js";
-import { career } from "./db/schema.js";
-import { processExams } from "./services/career.js";
-import { tickJobGeneration } from "./services/jobBoard.js";
+import { fillBoardToTarget, tickJobGeneration } from "./services/jobBoard.js";
 import {
   processMaintenanceCompletions,
   processMonthlyOwnership,
 } from "./services/maintenance.js";
 import { processInsurancePremiums } from "./services/insurance.js";
-import { refreshMarketplace } from "./services/marketplace.js";
+import { maybeRefreshMarketplace } from "./services/marketplace.js";
 import { processLoanPayments } from "./services/purchase.js";
 import { simBridge } from "./services/simBridge.js";
 import { appRouter } from "./trpc/router.js";
@@ -51,20 +47,12 @@ try {
   console.warn("[simBridge] start failed:", err);
 }
 
+// The world clock runs at 1× real time and persists whether the server is up
+// or not, so there is no pause: tickJobGeneration() below advances simDateTime
+// by the real time elapsed since the last tick. We sample every 30 real
+// seconds; the first tick after boot absorbs the whole offline gap in one step.
 const TICK_INTERVAL_MS = 30_000;
-let tickCount = 0;
-setInterval(() => {
-  // Honor the player-controlled pause. Sim time freezes, jobs don't expire,
-  // fuel drift halts, marketplace doesn't refresh — exactly what the player
-  // expects when they pause to plan a flight. The Force-tick mutation in the
-  // jobs router still calls tickJobGeneration directly and is unaffected.
-  const careerRow = db
-    .select({ isPaused: career.isPaused })
-    .from(career)
-    .where(eq(career.id, 1))
-    .get();
-  if (careerRow?.isPaused) return;
-
+function runWorldTick(): void {
   try {
     const result = tickJobGeneration();
     if (result.inserted > 0 || result.expired > 0) {
@@ -85,15 +73,6 @@ setInterval(() => {
     }
   } catch (err) {
     console.error("[loans] failed:", err);
-  }
-
-  try {
-    const examResult = processExams();
-    if (examResult.resolved > 0) {
-      console.log(`[exams] ${examResult.resolved} exam(s) resolved`);
-    }
-  } catch (err) {
-    console.error("[exams] failed:", err);
   }
 
   try {
@@ -127,17 +106,34 @@ setInterval(() => {
     console.error("[insurance] failed:", err);
   }
 
-  tickCount++;
-  if (tickCount % 6 === 0) {
-    try {
-      const mk = refreshMarketplace();
-      if (mk.added > 0 || mk.expired > 0) {
-        console.log(
-          `[marketplace] +${mk.added} listings, expired ${mk.expired} (total ${mk.total})`,
-        );
-      }
-    } catch (err) {
-      console.error("[marketplace] refresh failed:", err);
+  // Marketplace refresh is gated on sim-time inside maybeRefreshMarketplace
+  // (every ~24 sim-hours), so call it unconditionally each tick — including
+  // the boot catch-up tick, which lets a long offline gap expire stale
+  // listings and refill in one pass. The old tickCount-based cadence refreshed
+  // on a real-time clock that no longer matches the sim-time listing lifespans.
+  try {
+    const mk = maybeRefreshMarketplace();
+    if (mk && (mk.added > 0 || mk.expired > 0)) {
+      console.log(
+        `[marketplace] +${mk.added} listings, expired ${mk.expired} (total ${mk.total})`,
+      );
     }
+  } catch (err) {
+    console.error("[marketplace] refresh failed:", err);
   }
-}, TICK_INTERVAL_MS);
+}
+
+// Run one tick immediately on boot so any time that passed while the server
+// was offline (job expiry, fuel drift, loan/insurance/ownership charges) is
+// applied at once rather than waiting up to TICK_INTERVAL_MS for the first
+// scheduled tick. That single tick expires every short-window job against the
+// whole offline gap, so follow it by filling the board back to target in one
+// pass — otherwise a player returning after an overnight gap opens to a sparse
+// board that would only dribble back over the next few minutes of ticks.
+try {
+  runWorldTick();
+  fillBoardToTarget();
+} catch (err) {
+  console.error("[boot] catch-up failed:", err);
+}
+setInterval(runWorldTick, TICK_INTERVAL_MS);

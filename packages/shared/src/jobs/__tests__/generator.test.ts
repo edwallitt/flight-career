@@ -49,6 +49,11 @@ function makeCtx(overrides: Partial<GenerationContext> = {}): GenerationContext 
     reputationByRole: { ...FULL_REP },
     reputationByClient: {},
     simNow: Date.UTC(2026, 5, 15, 12, 0, 0), // mid-June
+    // One 30-min slice of world time per pass — the granularity the engine
+    // was originally tuned around (48 slices/day). Client rates scale off
+    // this, so the probability suites below behave as they did under the old
+    // fixed-tick model.
+    genElapsedMs: 30 * 60 * 1000,
     rng: seedrandom("test-seed"),
     currentBoardSize: 12,
     targetBoardSize: 12,

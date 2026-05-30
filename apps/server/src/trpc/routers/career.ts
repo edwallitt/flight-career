@@ -2,11 +2,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../db/client.js";
 import { airports, career } from "../../db/schema.js";
-import {
-  bookExam,
-  cancelExam,
-  getCareerSnapshot,
-} from "../../services/career.js";
+import { bookExam, getCareerSnapshot } from "../../services/career.js";
 import { publicProcedure, router } from "../trpc.js";
 
 export interface CareerSnapshot {
@@ -16,7 +12,6 @@ export interface CareerSnapshot {
   currentLocationName: string;
   simDateTime: number;
   startedAt: number;
-  isPaused: boolean;
 }
 
 const aircraftClass = z.enum(["SEP", "MEP", "SET", "JET"]);
@@ -37,27 +32,12 @@ export const careerRouter = router({
       currentLocationName: ap?.name ?? row.currentLocationIcao,
       simDateTime: row.simDateTime,
       startedAt: row.startedAt,
-      isPaused: row.isPaused,
     };
   }),
 
   snapshot: publicProcedure.query(() => getCareerSnapshot()),
 
-  setPaused: publicProcedure
-    .input(z.object({ paused: z.boolean() }))
-    .mutation(({ input }) => {
-      db.update(career)
-        .set({ isPaused: input.paused })
-        .where(eq(career.id, 1))
-        .run();
-      return { paused: input.paused };
-    }),
-
   bookExam: publicProcedure
     .input(z.object({ class: aircraftClass }))
     .mutation(({ input }) => bookExam({ class: input.class })),
-
-  cancelExam: publicProcedure
-    .input(z.object({ examId: z.number().int().positive() }))
-    .mutation(({ input }) => cancelExam({ examId: input.examId })),
 });

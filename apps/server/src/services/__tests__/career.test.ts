@@ -9,19 +9,7 @@ import {
   insertOwnedAircraft,
   resetTestDb,
 } from "../../__tests__/helpers/fixtures.js";
-import {
-  bookExam,
-  cancelExam,
-  getCareerSnapshot,
-  processExams,
-  tierForScore,
-} from "../career.js";
-
-const SIM_DAY_MS = 24 * 60 * 60 * 1000;
-
-function setSimNow(now: number): void {
-  db.update(career).set({ simDateTime: now }).where(eq(career.id, 1)).run();
-}
+import { bookExam, getCareerSnapshot, tierForScore } from "../career.js";
 
 function setHoursInClass(
   cls: "SEP" | "MEP" | "SET" | "JET",
@@ -49,7 +37,7 @@ describe("tierForScore", () => {
 describe("bookExam", () => {
   beforeEach(() => resetTestDb({ cash: 1_000_000_00 }));
 
-  it("MEP with 25 SEP hours: deducts cost, schedules exam, returns examId", () => {
+  it("MEP with 25 SEP hours: deducts cost and earns the rating instantly", () => {
     setHoursInClass("SEP", 30);
     const beforeCash = getCareer().cash;
 
@@ -57,9 +45,19 @@ describe("bookExam", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.cost).toBe(300_000); // $3,000 from RATING_REQUIREMENTS
-    expect(result.scheduledFor).toBe(getCareer().simDateTime + 3 * SIM_DAY_MS);
+    // Instant: resolves at the current sim time, no lead time.
+    expect(result.scheduledFor).toBe(getCareer().simDateTime);
 
     expect(getCareer().cash).toBe(beforeCash - result.cost);
+
+    // Rating is earned immediately on payment.
+    const ratingRow = db
+      .select()
+      .from(ratings)
+      .where(eq(ratings.class, "MEP"))
+      .get()!;
+    expect(ratingRow.earned).toBe(true);
+    expect(ratingRow.earnedAt).toBe(getCareer().simDateTime);
 
     const examRow = db
       .select()
@@ -67,7 +65,8 @@ describe("bookExam", () => {
       .where(eq(ratingExams.id, result.examId))
       .get()!;
     expect(examRow.class).toBe("MEP");
-    expect(examRow.status).toBe("booked");
+    expect(examRow.status).toBe("passed");
+    expect(examRow.resolvedAt).toBe(getCareer().simDateTime);
   });
 
   it("rejects when hour gates aren't met", () => {
@@ -86,13 +85,13 @@ describe("bookExam", () => {
     expect(result.error).toMatch(/no exam requirement/);
   });
 
-  it("rejects double-booking the same class", () => {
+  it("rejects re-taking a class already earned", () => {
     setHoursInClass("SEP", 30);
-    bookExam({ class: "MEP" });
+    bookExam({ class: "MEP" }); // earns MEP instantly
     const second = bookExam({ class: "MEP" });
     expect(second.ok).toBe(false);
     if (second.ok) return;
-    expect(second.error).toMatch(/already booked/);
+    expect(second.error).toMatch(/already earned/);
   });
 
   it("rejects when cash is below the exam fee", () => {
@@ -102,89 +101,6 @@ describe("bookExam", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error).toMatch(/Insufficient cash/i);
-  });
-});
-
-describe("processExams", () => {
-  beforeEach(() => resetTestDb({ cash: 1_000_000_00 }));
-
-  it("auto-passes booked exams whose scheduledFor has passed and grants the rating", () => {
-    setHoursInClass("SEP", 30);
-    const booked = bookExam({ class: "MEP" });
-    expect(booked.ok).toBe(true);
-    if (!booked.ok) return;
-
-    expect(
-      db.select().from(ratings).where(eq(ratings.class, "MEP")).get()!.earned,
-    ).toBe(false);
-
-    setSimNow(booked.scheduledFor + 1);
-    const result = processExams();
-    expect(result.resolved).toBe(1);
-
-    const ratingRow = db
-      .select()
-      .from(ratings)
-      .where(eq(ratings.class, "MEP"))
-      .get()!;
-    expect(ratingRow.earned).toBe(true);
-    expect(ratingRow.earnedAt).toBe(getCareer().simDateTime);
-
-    const examRow = db
-      .select()
-      .from(ratingExams)
-      .where(eq(ratingExams.id, booked.examId))
-      .get()!;
-    expect(examRow.status).toBe("passed");
-    expect(examRow.resolvedAt).toBe(getCareer().simDateTime);
-  });
-
-  it("does not resolve exams whose scheduledFor is still in the future", () => {
-    setHoursInClass("SEP", 30);
-    bookExam({ class: "MEP" });
-    const result = processExams();
-    expect(result.resolved).toBe(0);
-  });
-});
-
-describe("cancelExam", () => {
-  beforeEach(() => resetTestDb({ cash: 1_000_000_00 }));
-
-  it("cancels a booked exam and refunds 50% of the fee", () => {
-    setHoursInClass("SEP", 30);
-    const booked = bookExam({ class: "MEP" });
-    expect(booked.ok).toBe(true);
-    if (!booked.ok) return;
-
-    const cashAfterBooking = getCareer().cash;
-    const result = cancelExam({ examId: booked.examId });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.refundCents).toBe(Math.round(booked.cost / 2));
-
-    expect(getCareer().cash).toBe(cashAfterBooking + result.refundCents);
-
-    const examRow = db
-      .select()
-      .from(ratingExams)
-      .where(eq(ratingExams.id, booked.examId))
-      .get()!;
-    expect(examRow.status).toBe("cancelled");
-  });
-
-  it("rejects cancelling an exam that has already been resolved", () => {
-    setHoursInClass("SEP", 30);
-    const booked = bookExam({ class: "MEP" });
-    expect(booked.ok).toBe(true);
-    if (!booked.ok) return;
-
-    setSimNow(booked.scheduledFor + 1);
-    processExams();
-
-    const result = cancelExam({ examId: booked.examId });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error).toMatch(/Cannot cancel/);
   });
 });
 

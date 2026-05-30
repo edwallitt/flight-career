@@ -106,6 +106,13 @@ export function resetTestDb(opts: ResetOptions = {}): void {
       simDateTime: now,
       lastPlayedAt: now,
       startedAt: now,
+      // Anchor the real-time clock at "now" (real) so a tick inside a test
+      // advances the world clock only by the few ms the test takes — the
+      // stored simDateTime stays effectively fixed at `now`. lastGenSimTime
+      // matches simDateTime so genElapsedMs ≈ 0 and no surprise client jobs
+      // spawn during a plain tick (the open-market top-up still fills).
+      lastClockSyncReal: Date.now(),
+      lastGenSimTime: now,
     })
     .run();
 

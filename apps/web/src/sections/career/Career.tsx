@@ -6,10 +6,9 @@ import { Milestones } from "./Milestones.js";
 import { RatingsSection } from "./RatingsSection.js";
 import { ReputationSection } from "./ReputationSection.js";
 
-type ExamModalState =
-  | { kind: "book"; class: "MEP" | "SET" | "JET" }
-  | { kind: "cancel"; examId: number; class: "MEP" | "SET" | "JET" }
-  | null;
+// Exams resolve instantly on payment, so the only modal is the spend
+// confirmation for taking one. No pending/cancel state exists anymore.
+type ExamModalState = { class: "MEP" | "SET" | "JET" } | null;
 
 export function Career() {
   const snapshotQuery = trpc.career.snapshot.useQuery(undefined, {
@@ -47,11 +46,7 @@ export function Career() {
             <div className="flex flex-col gap-12">
               <RatingsSection
                 ratings={data.ratings}
-                simNow={data.simNow}
-                onBook={(cls) => setModal({ kind: "book", class: cls })}
-                onCancel={(examId, cls) =>
-                  setModal({ kind: "cancel", examId, class: cls })
-                }
+                onBook={(cls) => setModal({ class: cls })}
               />
               <ReputationSection
                 byRole={data.reputation.byRole}
@@ -72,7 +67,7 @@ export function Career() {
 
       {modal && (
         <ExamModal
-          state={modal}
+          cls={modal.class}
           onClose={() => setModal(null)}
           ratings={data?.ratings ?? []}
         />

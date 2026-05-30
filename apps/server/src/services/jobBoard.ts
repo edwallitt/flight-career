@@ -40,7 +40,18 @@ import {
 } from "./fuelDrift.js";
 
 const TARGET_BOARD_SIZE = 12;
-const SIM_MINUTES_PER_TICK = 30;
+
+// The world clock runs at 1× wall-clock time: each tick advances simDateTime
+// by the real time elapsed since the last sync (Date.now() - lastClockSyncReal),
+// so the world keeps moving whether the server is up or not — the first tick
+// after a restart applies the whole offline gap in one step.
+//
+// Job generation, however, must not replay an entire offline gap: a two-day
+// absence should leave a fresh board, not two days of accumulated contracts.
+// We expire stale jobs against the full elapsed time but cap the *generation*
+// window here; the size-capped open-market top-up refills the board the rest
+// of the way over the next few ticks.
+const MAX_GEN_ELAPSED_MS = 6 * 60 * 60 * 1000;
 
 // Ferries are their own content lane — they let the player fly (and get paid
 // for) aircraft they don't own, so they should be a visible, persistent fixture
@@ -412,10 +423,31 @@ export function tickJobGeneration(): TickResult {
     };
   }
 
-  // Advance sim clock by 30 simulated minutes per tick. Without this, jobs
-  // never age past their expiresAt and the board freezes once it fills.
-  const simNow = careerRow.simDateTime + SIM_MINUTES_PER_TICK * 60_000;
-  db.update(career).set({ simDateTime: simNow }).where(eq(career.id, 1)).run();
+  // Advance the world clock by the real time elapsed since the last sync, so
+  // it tracks wall-clock time 1× and absorbs any offline gap on the first tick
+  // after boot. `Math.max(0, …)` guards against a backwards clock (NTP step,
+  // manual change) freezing or rewinding the world.
+  const realNow = Date.now();
+  const realElapsed = Math.max(0, realNow - careerRow.lastClockSyncReal);
+  const simNow = careerRow.simDateTime + realElapsed;
+
+  // How much world time this pass generates for — clamped so a long offline
+  // gap (or a big abstracted-travel jump) doesn't carpet the board. Measured
+  // from the last generation point, not the last tick, so an abstracted-travel
+  // jump still produces the work that "happened" while the player repositioned.
+  const genElapsedMs = Math.min(
+    MAX_GEN_ELAPSED_MS,
+    Math.max(0, simNow - careerRow.lastGenSimTime),
+  );
+
+  db.update(career)
+    .set({
+      simDateTime: simNow,
+      lastClockSyncReal: realNow,
+      lastGenSimTime: simNow,
+    })
+    .where(eq(career.id, 1))
+    .run();
 
   const expired = expireStaleJobs(simNow);
   backfillZeroDistance(simNow);
@@ -438,6 +470,7 @@ export function tickJobGeneration(): TickResult {
     reputationByRole: reputationMaps.byRole,
     reputationByClient: reputationMaps.byClient,
     simNow,
+    genElapsedMs,
     rng,
     // Includes the ferries just inserted, so the open-market deficit fill
     // reserves their space instead of crowding them out.
@@ -455,6 +488,25 @@ export function tickJobGeneration(): TickResult {
     inserted: generated.length + ferries.length,
     fuelDrift,
   };
+}
+
+// Run generation ticks until the open board reaches its target size, bounded
+// by maxPasses. Used on boot: the single catch-up tick that absorbs an offline
+// gap expires every short-window job against the *full* elapsed time but only
+// refills the size-capped per-tick amount, so a player returning after an
+// overnight gap would otherwise open to a half-empty board that dribbles back
+// to target over the next few minutes of 30s ticks. This fills it in one pass.
+// The first pass (if any) does the real clock catch-up; later passes advance
+// the clock ~0 and add only the open-market/ferry top-ups (genElapsedMs ≈ 0,
+// so no extra client jobs).
+export function fillBoardToTarget(maxPasses = 8): void {
+  for (
+    let i = 0;
+    i < maxPasses && currentBoardSize() < TARGET_BOARD_SIZE;
+    i++
+  ) {
+    tickJobGeneration();
+  }
 }
 
 export interface FerryAircraftSummary {

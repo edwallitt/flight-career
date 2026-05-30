@@ -172,6 +172,12 @@ async function seed() {
         simDateTime: now,
         lastPlayedAt: now,
         startedAt: now,
+        // World clock anchored at real "now". lastGenSimTime is set 6 sim-hours
+        // behind so the first pre-warm tick generates ~6h of branded client
+        // work (not just open-market filler), giving a populated first board.
+        // The pre-warm ticks then re-anchor it to the present.
+        lastClockSyncReal: now,
+        lastGenSimTime: now - 6 * 60 * 60 * 1000,
       })
       .run();
 
@@ -233,10 +239,10 @@ async function seed() {
   ensureFuelPriceCurrent(careerSimNow);
 
   // Pre-warm the dispatch board so the first launch isn't an empty screen.
-  // Each tick advances sim time by 30 minutes and may emit 0-N jobs; running
-  // a handful of ticks reliably fills the board to roughly its target size.
-  // The home-airport guarantee ensures at least one job per tick departs
-  // from the player's current location.
+  // The first tick generates against the 6-hour gap baked into lastGenSimTime
+  // above (branded client work); the remaining ticks fill the rest of the
+  // board via the open-market top-up. The home-airport guarantee ensures at
+  // least one job per tick departs from the player's current location.
   const openJobCount = db
     .select()
     .from(jobs)

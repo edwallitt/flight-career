@@ -94,7 +94,7 @@ describe("Career — loading + shell", () => {
 });
 
 describe("Career — ratings + exam modal", () => {
-  it("clicking 'Book exam' on an eligible class opens the booking modal", async () => {
+  it("clicking 'Take exam' on an eligible class opens the spend-confirmation modal", async () => {
     renderWithProviders(<Career />, {
       seed: ({ seedQuery }) => {
         seedQuery(
@@ -115,19 +115,19 @@ describe("Career — ratings + exam modal", () => {
         seedQuery(["career", "get"], { cash: 1_000_000_00 });
       },
     });
-    const bookBtn = screen.getByRole("button", { name: /Book exam/i });
-    await userEvent.setup().click(bookBtn);
-    expect(screen.getByText(/Career · Book exam/i)).toBeInTheDocument();
+    const takeBtn = screen.getByRole("button", { name: /Take exam/i });
+    await userEvent.setup().click(takeBtn);
+    expect(screen.getByText(/Career · Take exam/i)).toBeInTheDocument();
     // The modal shows "MEP" prominently in its title.
     expect(screen.getAllByText(/MEP/).length).toBeGreaterThan(1);
   });
 
-  it("booking confirm fires career.bookExam mutation with the class", async () => {
+  it("confirming fires career.bookExam mutation with the class", async () => {
     const bookExam = vi.fn(() => ({
       ok: true as const,
       examId: 7,
       cost: 300_000,
-      scheduledFor: SIM_NOW + 3 * 86_400_000,
+      scheduledFor: SIM_NOW,
     }));
     renderWithProviders(<Career />, {
       seed: ({ seedQuery, mockMutation }) => {
@@ -149,57 +149,14 @@ describe("Career — ratings + exam modal", () => {
       },
     });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Book exam/i }));
-    // Modal opens — confirm button text is "Book exam · $X" or similar; match
-    // the primary action inside the dialog.
+    await user.click(screen.getByRole("button", { name: /Take exam/i }));
+    // Modal opens — confirm with the primary spend action.
     const confirmBtn = await screen.findByRole("button", {
-      name: /^Confirm booking$/i,
+      name: /Pay fee · earn rating/i,
     });
     await user.click(confirmBtn);
     await waitFor(() =>
       expect(bookExam).toHaveBeenCalledWith({ class: "MEP" }),
-    );
-  });
-
-  it("clicking 'Cancel exam' on a pending exam fires career.cancelExam with the examId", async () => {
-    const cancelExam = vi.fn(() => ({
-      ok: true as const,
-      refundCents: 150_000,
-    }));
-    renderWithProviders(<Career />, {
-      seed: ({ seedQuery, mockMutation }) => {
-        seedQuery(
-          ["career", "snapshot"],
-          makeSnapshot({
-            ratings: [
-              makeRating("SEP", { earned: true }),
-              makeRating("MEP", {
-                pendingExam: {
-                  id: 99,
-                  bookedAt: SIM_NOW - 86_400_000,
-                  scheduledFor: SIM_NOW + 2 * 86_400_000,
-                  cost: 300_000,
-                },
-                eligibility: { eligible: false, reasons: [] },
-              }),
-              makeRating("SET"),
-              makeRating("JET"),
-            ],
-          }),
-        );
-        seedQuery(["career", "get"], { cash: 1_000_000_00 });
-        mockMutation(["career", "cancelExam"], cancelExam);
-      },
-    });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /^Cancel · 50% refund/i }));
-    expect(screen.getByText(/Career · Cancel exam/i)).toBeInTheDocument();
-    const confirmCancel = await screen.findByRole("button", {
-      name: /^Cancel exam$/i,
-    });
-    await user.click(confirmCancel);
-    await waitFor(() =>
-      expect(cancelExam).toHaveBeenCalledWith({ examId: 99 }),
     );
   });
 });

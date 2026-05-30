@@ -6,6 +6,7 @@ import { resetTestDb } from "../../__tests__/helpers/fixtures.js";
 import {
   getListingById,
   getListings,
+  maybeRefreshMarketplace,
   refreshMarketplace,
   rngFromSeed,
 } from "../marketplace.js";
@@ -93,6 +94,29 @@ describe("refreshMarketplace", () => {
       .where(eq(aircraftListings.status, "available"))
       .all().length;
     expect(available).toBe(8);
+  });
+});
+
+describe("maybeRefreshMarketplace", () => {
+  beforeEach(() => resetTestDb());
+
+  function setSimNow(now: number): void {
+    db.update(career).set({ simDateTime: now }).where(eq(career.id, 1)).run();
+  }
+
+  it("refreshes on first call, then no-ops until the sim-time interval elapses", () => {
+    // First call has no anchor → refreshes and records the anchor.
+    const first = maybeRefreshMarketplace(8, rngFromSeed(1));
+    expect(first).not.toBeNull();
+
+    // A call within the 24 sim-hour window is gated out (returns null).
+    const now = db.select().from(career).where(eq(career.id, 1)).get()!.simDateTime;
+    setSimNow(now + 12 * 60 * 60 * 1000); // +12h, still inside the interval
+    expect(maybeRefreshMarketplace(8, rngFromSeed(2))).toBeNull();
+
+    // Past the interval, it refreshes again.
+    setSimNow(now + 25 * 60 * 60 * 1000); // +25h, interval elapsed
+    expect(maybeRefreshMarketplace(8, rngFromSeed(3))).not.toBeNull();
   });
 });
 

@@ -22,20 +22,6 @@ const CLASS_INDEX: Record<AircraftClass, string> = {
   JET: "IV",
 };
 
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-const MONTHS = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-function formatScheduledDate(ms: number): string {
-  const d = new Date(ms);
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  return `${day} ${MONTHS[d.getUTCMonth()]} · ${hh}:00 UTC`;
-}
-
 function formatEarnedDate(ms: number): string {
   const d = new Date(ms);
   const day = String(d.getUTCDate()).padStart(2, "0");
@@ -268,68 +254,6 @@ function EarnedCard({ card }: { card: RatingCard }) {
   );
 }
 
-// Rating exam pending — countdown plate.
-function PendingCard({
-  card,
-  simNow,
-  onCancel,
-}: {
-  card: RatingCard;
-  simNow: number;
-  onCancel: (examId: number, cls: "MEP" | "SET" | "JET") => void;
-}) {
-  const cls = card.class as AircraftClass;
-  const exam = card.pendingExam!;
-  const inMs = exam.scheduledFor - simNow;
-  const inDays = Math.max(0, Math.ceil(inMs / MS_PER_DAY));
-  return (
-    <CardShell variant="exam">
-      <div className="flex items-start justify-between">
-        <ClassMark cls={cls} variant="exam" />
-        <StatusSeal variant="exam" label="Exam booked" />
-      </div>
-
-      {/* Countdown hero */}
-      <div className="mt-4 flex items-end justify-between border-t border-amber-deep/30 pt-4">
-        <div className="flex flex-col gap-0.5">
-          <span className="font-mono text-[9px] uppercase tracking-callsign text-muted-faint">
-            T-minus
-          </span>
-          <div className="flex items-baseline gap-1.5">
-            <span className="font-display text-[34px] font-semibold leading-none tracking-tight text-amber-warm tabular-nums">
-              {inDays}
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-callsign text-muted">
-              sim {inDays === 1 ? "day" : "days"}
-            </span>
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-0.5 font-mono text-[10px] tabular-nums text-muted">
-          <span className="text-[9px] uppercase tracking-callsign text-muted-faint">
-            Scheduled
-          </span>
-          <span className="text-text-high">
-            {formatScheduledDate(exam.scheduledFor)}
-          </span>
-          <span className="text-muted-dim">
-            Fee paid · {formatPay(exam.cost)}
-          </span>
-        </div>
-      </div>
-
-      <div className="mt-auto pt-4">
-        <button
-          type="button"
-          onClick={() => onCancel(exam.id, cls as "MEP" | "SET" | "JET")}
-          className="w-full rounded-sm border border-ink-600 bg-ink-750/70 px-3 py-2 font-mono text-[10px] uppercase tracking-callsign text-muted transition-colors hover:border-urgency-critical/60 hover:bg-urgency-critical/[0.08] hover:text-urgency-critical"
-        >
-          Cancel · 50% refund
-        </button>
-      </div>
-    </CardShell>
-  );
-}
-
 function ReqLine({
   label,
   current,
@@ -437,11 +361,9 @@ function ProgressCard({
         </div>
         <div className="flex flex-col items-end gap-0.5">
           <span className="text-[9px] uppercase tracking-callsign text-muted-faint">
-            Lead time
+            Resolution
           </span>
-          <span className="text-text-high">
-            {req.examLeadDays} sim {req.examLeadDays === 1 ? "day" : "days"}
-          </span>
+          <span className="text-text-high">Instant</span>
         </div>
       </div>
 
@@ -463,8 +385,8 @@ function ProgressCard({
           {!eligible
             ? "Locked · requirements pending"
             : !canAfford
-              ? "Funds short · cannot book"
-              : "Book exam ▸"}
+              ? "Funds short · cannot take"
+              : "Take exam ▸"}
         </button>
       </div>
     </CardShell>
@@ -486,14 +408,10 @@ function SepLockedCard() {
 
 export function RatingsSection({
   ratings,
-  simNow,
   onBook,
-  onCancel,
 }: {
   ratings: Snapshot["ratings"];
-  simNow: number;
   onBook: (cls: "MEP" | "SET" | "JET") => void;
-  onCancel: (examId: number, cls: "MEP" | "SET" | "JET") => void;
 }) {
   const careerQuery = trpc.career.get.useQuery();
   const cash = careerQuery.data?.cash ?? 0;
@@ -513,16 +431,6 @@ export function RatingsSection({
         {ratings.map((card) => {
           if (card.earned) {
             return <EarnedCard key={card.class} card={card} />;
-          }
-          if (card.pendingExam && card.class !== "SEP") {
-            return (
-              <PendingCard
-                key={card.class}
-                card={card}
-                simNow={simNow}
-                onCancel={onCancel}
-              />
-            );
           }
           if (card.class === "SEP" || !card.requirement) {
             return <SepLockedCard key={card.class} />;

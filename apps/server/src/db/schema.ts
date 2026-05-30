@@ -87,10 +87,18 @@ export const career = sqliteTable("career", {
   briefedFuelGallons: real("briefed_fuel_gallons"),
   briefedFuelCostCents: integer("briefed_fuel_cost_cents"),
   flightStartedAt: integer("flight_started_at"),
-  // Player-controlled pause. When true, the server's tick loop is a no-op
-  // (sim time stops, jobs don't expire, fuel drift halts, marketplace freezes).
-  // The Force-tick mutation still works so dev tooling is unaffected.
-  isPaused: integer("is_paused", { mode: "boolean" }).notNull().default(false),
+  // Real-time clock anchor. The world clock runs at 1× wall-clock time and
+  // persists whether the server is running or not: each tick advances
+  // simDateTime by (Date.now() - lastClockSyncReal) and resets this to now.
+  // The first tick after a restart therefore applies the whole offline gap.
+  // Stored in real (Date.now) ms — the only real-time column besides
+  // lastPlayedAt.
+  lastClockSyncReal: integer("last_clock_sync_real").notNull(),
+  // Sim-time anchor for job generation. genElapsedMs = simDateTime -
+  // lastGenSimTime tells the generator how much world time to generate for
+  // (clamped on catch-up so a long absence doesn't flood the board). Advanced
+  // to the current simDateTime on every tick.
+  lastGenSimTime: integer("last_gen_sim_time").notNull(),
   // Per-flight tracking mode. 'manual' = the existing path (player enters
   // block time/destination by hand). 'tracked' = the SimBridge feeds events
   // and the completion form pre-fills from sim-derived values. Cleared on

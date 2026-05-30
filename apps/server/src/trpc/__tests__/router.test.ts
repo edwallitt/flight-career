@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db/client.js";
-import { aircraftListings, ratings } from "../../db/schema.js";
+import { aircraftListings, career, ratings } from "../../db/schema.js";
 import {
   getCareer,
   insertJob,
@@ -41,7 +41,7 @@ describe("trpc: career", () => {
     ).rejects.toBeInstanceOf(TRPCError);
   });
 
-  it("bookExam happy path: deducts cost and returns scheduledFor", async () => {
+  it("bookExam happy path: deducts cost and earns the rating instantly", async () => {
     db.update(ratings)
       .set({ hoursInClass: 30 })
       .where(eq(ratings.class, "SEP"))
@@ -50,7 +50,11 @@ describe("trpc: career", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.cost).toBe(300_000);
-    expect(result.scheduledFor).toBeGreaterThan(getCareer().simDateTime);
+    // Instant: resolves at the current sim time and the rating is earned now.
+    expect(result.scheduledFor).toBe(getCareer().simDateTime);
+    expect(
+      db.select().from(ratings).where(eq(ratings.class, "MEP")).get()!.earned,
+    ).toBe(true);
   });
 });
 
@@ -82,6 +86,13 @@ describe("trpc: jobs", () => {
 
   it("tickNow advances sim time and returns the tick result", async () => {
     const before = getCareer().simDateTime;
+    // The world clock advances by real time elapsed since the last sync.
+    // Anchor it an hour back so a tick reliably moves the clock forward
+    // regardless of how few milliseconds the test itself takes.
+    db.update(career)
+      .set({ lastClockSyncReal: Date.now() - 60 * 60 * 1000 })
+      .where(eq(career.id, 1))
+      .run();
     const result = await caller().jobs.tickNow();
     expect(result).toMatchObject({
       expired: expect.any(Number),

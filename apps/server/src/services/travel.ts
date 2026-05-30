@@ -15,7 +15,6 @@ import {
   ratings,
   transfers,
 } from "../db/schema.js";
-import { processExams } from "./career.js";
 import { fuelPriceCentsPerGal } from "./jobLifecycle.js";
 import { tickJobGeneration } from "./jobBoard.js";
 import { processLoanPayments } from "./purchase.js";
@@ -271,11 +270,6 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
       processLoanPayments();
     } catch {
       // Loan payment failures are non-fatal — they'll be picked up next tick.
-    }
-    try {
-      processExams();
-    } catch {
-      // Exam resolution failures are non-fatal — they'll be picked up next tick.
     }
   }
 

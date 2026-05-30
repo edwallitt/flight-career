@@ -15,6 +15,7 @@ import {
   airports,
   career,
 } from "../db/schema.js";
+import { getNumber, setNumber } from "./settings.js";
 
 const DEFAULT_TARGET_SIZE = 24;
 
@@ -133,6 +134,33 @@ export function refreshMarketplace(
   }
 
   return { added, expired, total: currentCount + added };
+}
+
+// Sim-time anchor (settings key) for the last marketplace refresh. Listings
+// live 7–30 sim-days (see generateListingBatch), so a 24 sim-hour refresh
+// cadence turns the market over roughly daily while staying comfortably inside
+// the shortest lifespan. Gating on sim-time (not tick count) means the cadence
+// tracks the 1× world clock — including absorbing a long offline gap on the
+// boot catch-up tick — instead of the old real-time tickCount % 6 trigger.
+const MARKETPLACE_REFRESH_KEY = "marketplace_last_refresh_sim_time";
+const MARKETPLACE_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+// Refresh the marketplace only if at least MARKETPLACE_REFRESH_INTERVAL_MS of
+// sim-time has elapsed since the last refresh. Returns the RefreshResult when
+// it fires, or null when the interval hasn't elapsed yet. Safe to call every
+// tick — that's how it's wired into the world tick.
+export function maybeRefreshMarketplace(
+  targetSize = DEFAULT_TARGET_SIZE,
+  rng: () => number = rngFromCryptoSeed(),
+): RefreshResult | null {
+  const simNow = getSimNow();
+  const last = getNumber(MARKETPLACE_REFRESH_KEY);
+  if (last != null && simNow - last < MARKETPLACE_REFRESH_INTERVAL_MS) {
+    return null;
+  }
+  const result = refreshMarketplace(targetSize, rng);
+  setNumber(MARKETPLACE_REFRESH_KEY, simNow);
+  return result;
 }
 
 export interface EnrichedListing {

@@ -9,13 +9,12 @@ import {
   resetTestDb,
 } from "../../__tests__/helpers/fixtures.js";
 import {
+  fillBoardToTarget,
   getOpenJobs,
   getOpenJobsWithReachability,
   getJobById,
   tickJobGeneration,
 } from "../jobBoard.js";
-
-const SIM_TICK_MS = 30 * 60 * 1000;
 
 function setSimNow(now: number): void {
   db.update(career).set({ simDateTime: now }).where(eq(career.id, 1)).run();
@@ -24,10 +23,41 @@ function setSimNow(now: number): void {
 describe("tickJobGeneration", () => {
   beforeEach(() => resetTestDb());
 
-  it("advances sim time by 30 simulated minutes per tick", () => {
+  it("advances the world clock by the real time elapsed since the last sync", () => {
     const before = getCareer().simDateTime;
+    // Pretend the last clock sync was an hour of real time ago — e.g. the
+    // server was offline for an hour. The next tick should carry the world
+    // clock forward by that gap.
+    const oneHourMs = 60 * 60 * 1000;
+    db.update(career)
+      .set({ lastClockSyncReal: Date.now() - oneHourMs })
+      .where(eq(career.id, 1))
+      .run();
     tickJobGeneration();
-    expect(getCareer().simDateTime).toBe(before + SIM_TICK_MS);
+    const advanced = getCareer().simDateTime - before;
+    // ~1 hour, allowing a little jitter for the time the test itself takes.
+    expect(advanced).toBeGreaterThanOrEqual(oneHourMs);
+    expect(advanced).toBeLessThan(oneHourMs + 60_000);
+  });
+
+  it("refills the board to target in one pass after a long offline gap", () => {
+    // Simulate the server having been offline for a day: the clock anchor is
+    // a day back, and the board holds a couple of short-window jobs that the
+    // catch-up tick will expire. fillBoardToTarget() should leave a full board
+    // immediately, not a sparse one that dribbles back over later ticks.
+    const now = getCareer().simDateTime;
+    insertJob({ expiresAt: now + 60 * 60 * 1000 }); // 1h window — will expire
+    insertJob({ expiresAt: now + 2 * 60 * 60 * 1000 });
+    db.update(career)
+      .set({ lastClockSyncReal: Date.now() - 24 * 60 * 60 * 1000 })
+      .where(eq(career.id, 1))
+      .run();
+
+    fillBoardToTarget();
+
+    const open = db.select().from(jobs).where(eq(jobs.status, "open")).all();
+    // Board is back at target (12), not the 2 stale jobs we started with.
+    expect(open.length).toBeGreaterThanOrEqual(12);
   });
 
   it("expires open jobs whose expiresAt is now in the past", () => {

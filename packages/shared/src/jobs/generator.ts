@@ -23,6 +23,14 @@ export interface GenerationContext {
   reputationByRole: Record<Role, number>;
   reputationByClient: Record<string, number>;
   simNow: number;
+  // World-time elapsed (sim ms) that this generation pass represents. The
+  // world clock runs at 1× real time, so a background tick every 30 real
+  // seconds carries genElapsedMs ≈ 30_000; a tick right after a long offline
+  // gap or an abstracted-travel jump carries much more. Client job rates are
+  // scaled by this so generation tracks elapsed world time rather than a fixed
+  // ticks-per-day assumption. The server clamps it on catch-up so a multi-day
+  // absence doesn't flood the board.
+  genElapsedMs: number;
   rng: () => number;
   currentBoardSize: number;
   targetBoardSize: number;
@@ -67,8 +75,14 @@ export interface GeneratedJob {
   description: string;
 }
 
-const TICKS_PER_DAY = 48;
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Safety cap on how many jobs a single client can spawn in one generation
+// pass. With elapsed-based rates a long catch-up window could otherwise ask
+// for a whole week of a client's jobs at once; the board's size cap would
+// trim them anyway, but bounding here keeps a single client from dominating.
+const MAX_CLIENT_JOBS_PER_GEN = 3;
 
 const URGENCY_EXPIRY_HOURS: Record<Urgency, number> = {
   critical: 2,
@@ -233,11 +247,21 @@ export function generateClientJobs(
   const month = new Date(ctx.simNow).getUTCMonth();
   const seasonal = client.seasonalMultipliers[month] ?? 1;
   const expectedPerDay = client.baseJobsPerDay * seasonal;
-  const probPerTick = expectedPerDay / TICKS_PER_DAY;
+  // Expected jobs for the elapsed world-time window. At 1× real time a 30s
+  // background tick yields a tiny fraction (≈ expectedPerDay × 30s/day), so
+  // most ticks produce nothing and a client surfaces work every few hours —
+  // matching its baseJobsPerDay over a real day.
+  const expected = expectedPerDay * (ctx.genElapsedMs / DAY_MS);
+  if (expected <= 0) return [];
 
-  if (ctx.rng() > probPerTick) return [];
-
-  const count = ctx.rng() < 0.1 ? 2 : 1;
+  // Sample an integer job count from the (possibly fractional) expectation:
+  // the whole part fires for sure, the fractional part is a coin flip. Bounded
+  // so a long catch-up window can't have one client carpet the board.
+  const whole = Math.floor(expected);
+  const frac = expected - whole;
+  let count = whole + (ctx.rng() < frac ? 1 : 0);
+  if (count <= 0) return [];
+  count = Math.min(count, MAX_CLIENT_JOBS_PER_GEN);
 
   const premiumGate = (client.reputationGateMin + client.reputationGateMax) / 2;
   const premiumUnlocked =

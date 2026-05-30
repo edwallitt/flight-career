@@ -6,7 +6,7 @@ import {
   type EligibilityCheck,
   type Role,
 } from "@flightcareer/shared";
-import { and, eq, lte, ne } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   career,
@@ -20,7 +20,6 @@ import {
 
 const RATING_CLASSES: AircraftClass[] = ["SEP", "MEP", "SET", "JET"];
 const ROLES: Role[] = ["bush", "air_taxi", "light_jet"];
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Snapshot
@@ -451,16 +450,24 @@ export function bookExam(input: { class: AircraftClass }): BookExamResult {
       .where(eq(career.id, 1))
       .run();
 
-    const scheduledFor = simNow + req.examLeadDays * MS_PER_DAY;
+    // Exams resolve instantly: paying the fee earns the rating on the spot.
+    // We still record a ratingExams row (status "passed") so the exam — and
+    // its fee — show up in career history. bookedAt/scheduledFor/resolvedAt all
+    // collapse to simNow since there's no longer a lead time.
+    tx.update(ratings)
+      .set({ earned: true, earnedAt: simNow })
+      .where(eq(ratings.class, input.class))
+      .run();
 
     const insertResult = tx
       .insert(ratingExams)
       .values({
         class: input.class,
         bookedAt: simNow,
-        scheduledFor,
+        scheduledFor: simNow,
+        resolvedAt: simNow,
         cost: req.examCostCents,
-        status: "booked",
+        status: "passed",
       })
       .returning({ id: ratingExams.id })
       .all();
@@ -468,92 +475,9 @@ export function bookExam(input: { class: AircraftClass }): BookExamResult {
     return {
       ok: true,
       examId: insertResult[0]!.id,
-      scheduledFor,
+      scheduledFor: simNow,
       cost: req.examCostCents,
     };
   });
 }
 
-// ---------------------------------------------------------------------------
-// cancelExam
-// ---------------------------------------------------------------------------
-
-export type CancelExamResult =
-  | { ok: true; refundCents: number }
-  | { ok: false; error: string };
-
-const REFUND_FRACTION = 0.5;
-
-export function cancelExam(input: { examId: number }): CancelExamResult {
-  return db.transaction((tx): CancelExamResult => {
-    const careerRow = tx.select().from(career).where(eq(career.id, 1)).get();
-    if (!careerRow) return { ok: false, error: "Career not found" };
-
-    const examRow = tx
-      .select()
-      .from(ratingExams)
-      .where(eq(ratingExams.id, input.examId))
-      .get();
-    if (!examRow) return { ok: false, error: "Exam not found" };
-    if (examRow.status !== "booked") {
-      return { ok: false, error: `Cannot cancel exam in state ${examRow.status}` };
-    }
-
-    const refund = Math.round(examRow.cost * REFUND_FRACTION);
-
-    tx.update(ratingExams)
-      .set({ status: "cancelled", resolvedAt: careerRow.simDateTime })
-      .where(eq(ratingExams.id, input.examId))
-      .run();
-
-    tx.update(career)
-      .set({ cash: careerRow.cash + refund })
-      .where(eq(career.id, 1))
-      .run();
-
-    return { ok: true, refundCents: refund };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// processExams (auto-pass)
-// ---------------------------------------------------------------------------
-
-export interface ExamProcessResult {
-  resolved: number;
-}
-
-export function processExams(): ExamProcessResult {
-  const careerRow = db.select().from(career).where(eq(career.id, 1)).get();
-  if (!careerRow) return { resolved: 0 };
-  const simNow = careerRow.simDateTime;
-
-  const due = db
-    .select()
-    .from(ratingExams)
-    .where(
-      and(
-        eq(ratingExams.status, "booked"),
-        lte(ratingExams.scheduledFor, simNow),
-      ),
-    )
-    .all();
-  if (due.length === 0) return { resolved: 0 };
-
-  let resolved = 0;
-  for (const exam of due) {
-    db.transaction((tx) => {
-      tx.update(ratingExams)
-        .set({ status: "passed", resolvedAt: simNow })
-        .where(eq(ratingExams.id, exam.id))
-        .run();
-      tx.update(ratings)
-        .set({ earned: true, earnedAt: simNow })
-        .where(eq(ratings.class, exam.class))
-        .run();
-    });
-    resolved += 1;
-  }
-
-  return { resolved };
-}

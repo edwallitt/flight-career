@@ -29,3 +29,16 @@ export function getMsfsEnabled(): boolean {
 export function setMsfsEnabled(enabled: boolean): void {
   writeRaw(SETTING_MSFS_ENABLED, enabled ? "true" : "false");
 }
+
+/** Read a numeric setting, or null if unset / unparseable. */
+export function getNumber(key: string): number | null {
+  const raw = readRaw(key);
+  if (raw == null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Persist a numeric setting. */
+export function setNumber(key: string, value: number): void {
+  writeRaw(key, String(value));
+}
