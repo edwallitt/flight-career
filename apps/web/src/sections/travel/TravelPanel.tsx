@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { trpc } from "../../trpc.js";
-import { formatCash, formatSimDateTime } from "../../lib/formatters.js";
+import { formatCash } from "../../lib/formatters.js";
 import { AirportPicker } from "./AirportPicker.js";
 import { RouteMap } from "../../components/map/RouteMap.js";
 
@@ -438,33 +438,17 @@ export function TravelPanel({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="font-mono text-[10px] uppercase tracking-callsign text-amber-glow">
-                          Sim time advances
+                          Est. flight time
                         </span>
                       </div>
                       <span className="font-mono tabular-nums text-amber-glow">
                         {formatDuration(preview.estimate.durationMinutes)}
                       </span>
                     </div>
-                    {career.data && (
-                      <div className="mt-2 grid grid-cols-2 gap-x-3 text-tiny text-muted">
-                        <div className="flex flex-col">
-                          <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
-                            Now
-                          </span>
-                          <span className="font-mono tabular-nums text-text">
-                            {formatSimDateTime(career.data.simDateTime)}
-                          </span>
-                        </div>
-                        <div className="flex flex-col items-end">
-                          <span className="font-mono text-[10px] uppercase tracking-callsign text-muted-dim">
-                            Arrival
-                          </span>
-                          <span className="font-mono tabular-nums text-text-high">
-                            {formatSimDateTime(preview.willArriveAt)}
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                    <p className="mt-2 text-tiny text-muted">
+                      Transfers are instantaneous — the world clock stays on real
+                      time and won&apos;t jump ahead.
+                    </p>
                   </div>
                 </div>
 

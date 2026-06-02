@@ -102,7 +102,7 @@ describe("previewTransfer", () => {
 describe("executeTransfer", () => {
   beforeEach(() => resetTestDb({ cash: 1_000_000_00 }));
 
-  it("pilot: moves player location, advances sim time, debits cost, writes transfers row", () => {
+  it("pilot: moves player location, debits cost, writes transfers row — without advancing sim time", () => {
     const before = getCareer();
 
     const preview = previewTransfer({
@@ -124,12 +124,14 @@ describe("executeTransfer", () => {
     const after = getCareer();
     expect(after.currentLocationIcao).toBe("CYQM");
     expect(after.cash).toBe(before.cash - expectedCost);
-    // arrivedAtSimTime is captured pre-post-tick; the post-transfer tick may
-    // bump simDateTime further by 30 sim minutes.
-    expect(result.arrivedAtSimTime).toBe(
-      before.simDateTime + expectedDuration * 60_000,
-    );
-    expect(after.simDateTime).toBeGreaterThanOrEqual(result.arrivedAtSimTime);
+    // Transfers are instantaneous: arrival is "now", not now + flight time.
+    expect(result.arrivedAtSimTime).toBe(before.simDateTime);
+    // Sanity: the flight itself is long (>= 30 min), so if it were being added
+    // to sim time the assertion below would blow past the 1-minute window.
+    expect(expectedDuration * 60_000).toBeGreaterThanOrEqual(30 * 60_000);
+    // The post-transfer tick only folds in real wall-clock elapsed (a few ms
+    // in a test) — the flight duration must NOT be added to the world clock.
+    expect(after.simDateTime - before.simDateTime).toBeLessThan(60_000);
 
     const trRow = db
       .select()

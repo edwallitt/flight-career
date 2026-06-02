@@ -182,8 +182,6 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
       return { ok: false, error: "Insufficient cash" };
     }
 
-    const newSimTime =
-      ctx.careerRow.simDateTime + estimate.durationMinutes * 60_000;
     const movesPilot = req.type === "pilot" || req.type === "pilot_aircraft";
     const movesAircraft =
       req.type === "pilot_aircraft" || req.type === "aircraft";
@@ -191,7 +189,10 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
     tx.update(career)
       .set({
         cash: ctx.careerRow.cash - estimate.costCents,
-        simDateTime: newSimTime,
+        // Transfers are instantaneous on the world clock — they no longer
+        // advance simDateTime, which would otherwise desync sim time from the
+        // 1× real-time clock permanently (the tick only adds the real-time
+        // delta, so any one-off bump here never gets reabsorbed).
         lastPlayedAt: Date.now(),
         currentLocationIcao: movesPilot
           ? ctx.destRow.icao
@@ -242,6 +243,9 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
         ownedAircraftId: ctx.ownedRow?.id ?? null,
         distanceNm: ctx.distanceNm,
         costCents: estimate.costCents,
+        // Recorded for history/flavor only. Transfers no longer advance the
+        // world clock, so this is the estimated flight time, not elapsed sim
+        // time.
         simTimeAdvancedMinutes: estimate.durationMinutes,
         aircraftHoursAccrued: estimate.aircraftHoursAccrued,
         fuelGallonsBurned: estimate.fuelGallonsBurned,
@@ -253,13 +257,15 @@ export function executeTransfer(req: TransferRequest): ExecuteResult {
     return {
       ok: true,
       transferId: insertResult[0]!.id,
-      arrivedAtSimTime: newSimTime,
+      arrivedAtSimTime: ctx.careerRow.simDateTime,
     };
   });
 
-  // Sweep stale jobs and top up the board now that sim time has advanced.
-  // Run outside the transfer transaction so a tick failure doesn't roll back
-  // the player's travel.
+  // Sweep stale jobs and process loans so the board reflects the player's new
+  // location. The transfer itself no longer advances sim time, but the tick
+  // still folds in real-time elapsed since the last sync. Run outside the
+  // transfer transaction so a tick failure doesn't roll back the player's
+  // travel.
   if (result.ok) {
     try {
       tickJobGeneration();
