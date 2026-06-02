@@ -315,6 +315,64 @@ describe("cancelAcceptedJob", () => {
   });
 });
 
+describe("cancellation forgiveness perk (High+ client standing)", () => {
+  beforeEach(() => {
+    resetTestDb({ startingRoleRep: 50 });
+    // High standing (70) with the default job's client (maritime_cargo) so the
+    // perk fires; role rep stays at 50.
+    db.insert(reputation)
+      .values({ scope: "client:maritime_cargo", score: 70, updatedAt: 0 })
+      .run();
+  });
+
+  // The previewed cancelPenalty (active-job surface) MUST equal the rep delta
+  // actually applied on cancel/abort, or the player sees one number and is
+  // charged another. These tests pin preview === applied for both paths.
+
+  it("accepted cancel: preview equals applied, client hit halved, role intact", () => {
+    const ac = insertOwnedAircraft({ currentLocationIcao: "CYHZ" });
+    const job = insertJob();
+    acceptJob({ jobId: job.id, aircraftSource: "owned", ownedAircraftId: ac.id });
+
+    const active = getActiveJob();
+    expect(active).not.toBeNull();
+    const preview = active!.cancelPenalty;
+    // Client -3 halved → round(-1.5) = -1; role -2 untouched.
+    expect(preview).toEqual({ role: -2, client: -1 });
+
+    const roleBefore = getRep("bush");
+    const clientBefore = getRep("client:maritime_cargo");
+    expect(cancelAcceptedJob().ok).toBe(true);
+
+    expect(getRep("bush") - roleBefore).toBe(preview.role);
+    expect(getRep("client:maritime_cargo") - clientBefore).toBe(preview.client);
+  });
+
+  it("in-flight abort: preview equals applied, client hit halved, role intact", () => {
+    const ac = insertOwnedAircraft({
+      currentLocationIcao: "CYHZ",
+      fuelOnBoardGal: 20,
+    });
+    const job = insertJob();
+    acceptJob({ jobId: job.id, aircraftSource: "owned", ownedAircraftId: ac.id });
+    briefJob({ fuelGallons: 30 });
+    beginFlight();
+
+    const active = getActiveJob();
+    expect(active).not.toBeNull();
+    const preview = active!.cancelPenalty;
+    // Abort -8/-12; client halved → round(-6) = -6; role -8 untouched.
+    expect(preview).toEqual({ role: -8, client: -6 });
+
+    const roleBefore = getRep("bush");
+    const clientBefore = getRep("client:maritime_cargo");
+    expect(abortFlight().ok).toBe(true);
+
+    expect(getRep("bush") - roleBefore).toBe(preview.role);
+    expect(getRep("client:maritime_cargo") - clientBefore).toBe(preview.client);
+  });
+});
+
 describe("beginFlight", () => {
   beforeEach(() => resetTestDb());
 

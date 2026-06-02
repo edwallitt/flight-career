@@ -6,6 +6,7 @@ import {
   getClientById,
   haversineNm,
   pickRecommendedJobId,
+  reputationTier,
   runGenerationTick,
   type AircraftClass,
   type FerryAircraftType,
@@ -17,6 +18,7 @@ import {
   type GeneratedJob,
   type JobFit,
   type JobReachability,
+  type ReputationTier,
   type Role,
   priceFerryLeg,
 } from "@flightcareer/shared";
@@ -528,6 +530,10 @@ export interface JobListItem {
   id: number;
   clientId: string | null;
   clientName: string | null;
+  // The player's current standing with this client (null for ferries and
+  // open-market jobs, which have no client relationship). Lets the board badge
+  // a job with the relationship that's raising its pay.
+  clientStanding: { tier: ReputationTier; score: number } | null;
   role: "bush" | "air_taxi" | "light_jet" | "open";
   originIcao: string;
   destinationIcao: string;
@@ -556,6 +562,7 @@ type AircraftTypeRow = typeof aircraftTypes.$inferSelect;
 function rowToListItem(
   row: typeof jobs.$inferSelect,
   ferryTypeById: Map<string, AircraftTypeRow>,
+  repByClient: Record<string, number>,
 ): JobListItem {
   const client = row.clientId ? getClientById(row.clientId) : undefined;
   let capabilities: string[] = [];
@@ -584,10 +591,18 @@ function rowToListItem(
       };
     }
   }
+  const clientStanding =
+    !isFerry && row.clientId
+      ? (() => {
+          const score = repByClient[row.clientId] ?? 0;
+          return { tier: reputationTier(score), score };
+        })()
+      : null;
   return {
     id: row.id,
     clientId: row.clientId,
     clientName: isFerry ? row.ferryOwnerName : (client?.name ?? null),
+    clientStanding,
     role: row.role,
     originIcao: row.originIcao,
     destinationIcao: row.destinationIcao,
@@ -640,7 +655,8 @@ export function getOpenJobs(): JobListItem[] {
     .all();
   rows.sort((a, b) => b.generatedAt - a.generatedAt);
   const ferryTypeById = loadFerryTypeMap(rows);
-  return rows.map((row) => rowToListItem(row, ferryTypeById));
+  const repByClient = loadReputation().byClient;
+  return rows.map((row) => rowToListItem(row, ferryTypeById, repByClient));
 }
 
 export interface JobListItemWithReachability extends JobListItem {
@@ -1101,7 +1117,7 @@ export function getJobById(id: number): JobDetail | null {
   const row = db.select().from(jobs).where(eq(jobs.id, id)).get();
   if (!row) return null;
   const ferryTypeById = loadFerryTypeMap([row]);
-  const list = rowToListItem(row, ferryTypeById);
+  const list = rowToListItem(row, ferryTypeById, loadReputation().byClient);
   const client = row.clientId ? getClientById(row.clientId) : undefined;
   const originAp = db
     .select()

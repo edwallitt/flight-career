@@ -11,6 +11,7 @@ function makeJob(overrides: Partial<JobRow> = {}): JobRow {
     id: 1,
     clientId: "maritime_cargo",
     clientName: "Maritime Cargo Express",
+    clientStanding: null,
     role: "bush",
     originIcao: "CYHZ",
     destinationIcao: "CYQM",

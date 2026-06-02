@@ -123,6 +123,20 @@ function clampRep(score: number): number {
   return score;
 }
 
+/**
+ * Current per-client reputation score (0 if the client has no row yet). Reads
+ * via the shared connection, so it is safe to call inside a transaction before
+ * any reputation write in that same transaction.
+ */
+export function getClientReputationScore(clientId: string): number {
+  const row = db
+    .select()
+    .from(reputation)
+    .where(eq(reputation.scope, `client:${clientId}`))
+    .get();
+  return row?.score ?? 0;
+}
+
 export function adjustReputation(
   scope: string,
   delta: number,

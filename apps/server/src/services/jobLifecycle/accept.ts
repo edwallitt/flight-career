@@ -1,4 +1,5 @@
 import {
+  applyCancellationPerk,
   checkEligibility,
   type AircraftCandidate,
 } from "@flightcareer/shared";
@@ -18,6 +19,7 @@ import {
   adjustReputation,
   dispatchVerdict,
   jobToRequirements,
+  getClientReputationScore,
   loadAirportLite,
   loadPlayerState,
   type LifecycleResult,
@@ -321,7 +323,12 @@ export function cancelAcceptedJob(): LifecycleResult {
     }
 
     if (!waiveRepPenalty) {
-      const hits = REP_HIT_BY_STATE[state];
+      // Cancellation forgiveness: High+ standing with the client halves the
+      // client-side hit (role standing is untouched).
+      const clientRep = jobRow.clientId
+        ? getClientReputationScore(jobRow.clientId)
+        : 0;
+      const hits = applyCancellationPerk(REP_HIT_BY_STATE[state], clientRep);
       adjustReputation(jobRow.role, hits.role, careerRow.simDateTime);
       if (jobRow.clientId) {
         adjustReputation(

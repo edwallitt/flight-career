@@ -1,5 +1,6 @@
 import {
   FERRY_VOICE_PROFILES,
+  applyCancellationPerk,
   assessRisk,
   completeFlight,
   generateEvent,
@@ -39,6 +40,7 @@ import {
   activeAircraftType,
   adjustReputation,
   fuelPriceCentsPerGal,
+  getClientReputationScore,
   type LifecycleResult,
 } from "./shared.js";
 import { getActivePolicyForAircraft } from "../insurance.js";
@@ -1095,11 +1097,17 @@ export function abortFlight(): LifecycleResult {
     if (!jobRow) return { ok: false, error: "Active job not found" };
 
     if (jobRow.role !== "open") {
-      adjustReputation(jobRow.role, ABORT_REP_PENALTY.role, careerRow.simDateTime);
+      // Cancellation forgiveness: High+ client standing halves the client-side
+      // abort hit (role standing is untouched).
+      const clientRep = jobRow.clientId
+        ? getClientReputationScore(jobRow.clientId)
+        : 0;
+      const hits = applyCancellationPerk(ABORT_REP_PENALTY, clientRep);
+      adjustReputation(jobRow.role, hits.role, careerRow.simDateTime);
       if (jobRow.clientId) {
         adjustReputation(
           `client:${jobRow.clientId}`,
-          ABORT_REP_PENALTY.client,
+          hits.client,
           careerRow.simDateTime,
         );
       }

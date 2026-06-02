@@ -12,6 +12,7 @@ function inputs(over: Partial<PayInputs> = {}): PayInputs {
     isRemoteDestination: false,
     basePayMultiplier: 1,
     familiarityDiscount: 0,
+    loyaltyBonus: 0,
     ...over,
   };
 }
@@ -102,6 +103,13 @@ describe("calculatePay", () => {
   it("reduces pay by the familiarity discount", () => {
     expect(calculatePay(inputs({ familiarityDiscount: 0.1 }))).toBe(
       Math.round(300 * 0.9) * 100,
+    );
+  });
+
+  it("raises pay by the loyalty bonus", () => {
+    // 100 nm × $3 = $300, +30% loyalty → $390.
+    expect(calculatePay(inputs({ loyaltyBonus: 0.3 }))).toBe(
+      Math.round(300 * 1.3) * 100,
     );
   });
 

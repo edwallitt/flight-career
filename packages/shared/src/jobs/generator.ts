@@ -7,6 +7,10 @@ import type {
   Urgency,
   WeatherSensitivity,
 } from "../clients/types.js";
+import {
+  jobFrequencyMultiplierForScore,
+  loyaltyBonusForScore,
+} from "../career/reputation.js";
 import { haversineNm } from "./distance.js";
 import { calculatePay } from "./pay-calculator.js";
 
@@ -191,6 +195,9 @@ function concretizeFromTemplate(
   const distanceNm = haversineNm(originAp, destAp);
   const isUnpavedRequired = template.requiredCapabilities.includes("unpaved");
 
+  // Loyalty pay bonus: standing with this client raises the pay on its jobs,
+  // baked into the board number here so it equals the eventual payout.
+  const clientRep = ctx.reputationByClient[client.id] ?? 0;
   const pay = calculatePay({
     distanceNm,
     requiredClass: template.minClass,
@@ -201,6 +208,7 @@ function concretizeFromTemplate(
     isRemoteDestination: destAp.size === "remote",
     basePayMultiplier: template.basePayMultiplier,
     familiarityDiscount: 0,
+    loyaltyBonus: loyaltyBonusForScore(clientRep),
   });
 
   const expiresAt =
@@ -246,7 +254,12 @@ export function generateClientJobs(
 
   const month = new Date(ctx.simNow).getUTCMonth();
   const seasonal = client.seasonalMultipliers[month] ?? 1;
-  const expectedPerDay = client.baseJobsPerDay * seasonal;
+  // Priority work: High+ standing with this client multiplies its job rate.
+  const clientRep = ctx.reputationByClient[client.id] ?? 0;
+  const expectedPerDay =
+    client.baseJobsPerDay *
+    seasonal *
+    jobFrequencyMultiplierForScore(clientRep);
   // Expected jobs for the elapsed world-time window. At 1× real time a 30s
   // background tick yields a tiny fraction (≈ expectedPerDay × 30s/day), so
   // most ticks produce nothing and a client surfaces work every few hours —
@@ -396,6 +409,8 @@ function buildOpenMarketJob(
     isRemoteDestination: destination.size === "remote",
     basePayMultiplier: 0.85,
     familiarityDiscount: 0,
+    // Open-market jobs have no client relationship → no loyalty bonus.
+    loyaltyBonus: 0,
   });
   const pay = Math.max(OPEN_MARKET_PAY_FLOOR_CENTS, rawPay);
 

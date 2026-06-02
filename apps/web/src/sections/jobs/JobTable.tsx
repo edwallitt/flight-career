@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
+import { reputationPerksForTier } from "@flightcareer/shared";
 import {
   formatPay,
   formatPayloadType,
@@ -379,6 +380,23 @@ function Row({
               title="Highest pay/hr at your current location"
             >
               best
+            </span>
+          )}
+          {job.clientStanding && job.clientStanding.tier !== "novice" && (
+            <span
+              className={[
+                "rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-callsign",
+                job.clientStanding.tier === "top"
+                  ? "border-amber-warm/60 bg-amber-warm/[0.1] text-amber-warm"
+                  : job.clientStanding.tier === "high"
+                    ? "border-amber-deep/60 bg-amber-glow/[0.08] text-amber-glow"
+                    : "border-ink-500 bg-ink-700/40 text-muted",
+              ].join(" ")}
+              title={`${job.clientStanding.tier.toUpperCase()} standing · ${reputationPerksForTier(
+                job.clientStanding.tier,
+              ).join(" · ")}`}
+            >
+              {job.clientStanding.tier}
             </span>
           )}
         </span>

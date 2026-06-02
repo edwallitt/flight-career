@@ -1,4 +1,5 @@
 import {
+  applyCancellationPerk,
   assessRisk,
   haversineNm,
   recommendedFuelUplift,
@@ -18,6 +19,7 @@ import {
   REP_HIT_BY_STATE,
   activeAircraftType,
   fuelPriceCentsPerGal,
+  getClientReputationScore,
   recommendedFuelGallons,
 } from "./shared.js";
 
@@ -215,12 +217,18 @@ export function getActiveJob(): ActiveJobSnapshot | null {
   // briefed use the cancel magnitudes; in_progress uses the abort magnitudes
   // (a different code path, but the player sees one "back out" cost).
   // Ferries have no client/role to upset, so cancelling is consequence-free.
-  const penalty: { role: number; client: number } =
+  const rawPenalty: { role: number; client: number } =
     careerRow.activeAircraftSource === "ferry"
       ? { role: 0, client: 0 }
       : careerRow.activeFlightState === "in_progress"
         ? ABORT_REP_PENALTY
         : REP_HIT_BY_STATE[careerRow.activeFlightState];
+  // Mirror the cancellation-forgiveness perk applied on cancel/abort so the
+  // previewed penalty matches what the player will actually be charged.
+  const penaltyClientRep = jobRow.clientId
+    ? getClientReputationScore(jobRow.clientId)
+    : 0;
+  const penalty = applyCancellationPerk(rawPenalty, penaltyClientRep);
 
   const ferryInfo: ActiveJobFerryInfo | null =
     jobRow.jobType === "ferry" &&

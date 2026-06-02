@@ -1,5 +1,10 @@
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@flightcareer/server/router";
+import {
+  REPUTATION_TIER_MIN,
+  reputationPerksForTier,
+  type ReputationTier,
+} from "@flightcareer/shared";
 import { ROLE_LABEL } from "../../lib/formatters.js";
 import { SectionHeader } from "./SectionHeader.js";
 
@@ -144,6 +149,25 @@ function RoleRow({ row }: { row: ByRole[number] }) {
   );
 }
 
+// What the player's current standing with a client is buying them. Reads the
+// same shared constants the generator/lifecycle use, so the readout can't drift
+// from the actual mechanics.
+function ClientPerks({ tier }: { tier: ReputationTier }) {
+  const perks = reputationPerksForTier(tier);
+  if (perks.length === 0) {
+    return (
+      <div className="font-mono text-[9px] uppercase tracking-callsign text-muted-faint">
+        +10% pay at Mid ({REPUTATION_TIER_MIN.mid})
+      </div>
+    );
+  }
+  return (
+    <div className="font-mono text-[9px] uppercase tracking-callsign text-amber-deep">
+      {perks.join(" · ")}
+    </div>
+  );
+}
+
 function ClientRow({
   row,
   simNow,
@@ -193,6 +217,7 @@ function ClientRow({
             {TIER_LABEL[row.tier]}
           </span>
         </div>
+        <ClientPerks tier={row.tier as ReputationTier} />
       </div>
 
       <div className="font-mono text-[18px] font-semibold leading-none tabular-nums text-text-high">

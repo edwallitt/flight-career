@@ -2,6 +2,7 @@ import {
   RATING_REQUIREMENTS,
   checkExamEligibility,
   getClientById,
+  reputationTier,
   type AircraftClass,
   type EligibilityCheck,
   type Role,
@@ -27,11 +28,10 @@ const ROLES: Role[] = ["bush", "air_taxi", "light_jet"];
 
 export type ReputationTier = "novice" | "mid" | "high" | "top";
 
+// Delegates to the shared canonical tier function — the same thresholds drive
+// the loyalty/priority/forgiveness perks in packages/shared/src/career.
 export function tierForScore(score: number): ReputationTier {
-  if (score >= 85) return "top";
-  if (score >= 60) return "high";
-  if (score >= 25) return "mid";
-  return "novice";
+  return reputationTier(score);
 }
 
 export interface RatingCard {

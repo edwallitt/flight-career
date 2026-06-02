@@ -88,6 +88,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     // 100nm * $3 = $300 = 30000 cents
     expect(sep100nm).toBe(30000);
@@ -102,6 +103,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     // 100nm * $22 = $2200 = 220000 cents
     expect(jet100nm).toBe(220000);
@@ -118,6 +120,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     const stacked = calculatePay({
       distanceNm: 200,
@@ -129,6 +132,7 @@ describe("calculatePay", () => {
       isRemoteDestination: true,
       basePayMultiplier: 2,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     expect(stacked).toBeGreaterThan(base * 4);
   });
@@ -144,6 +148,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     const discounted = calculatePay({
       distanceNm: 100,
@@ -155,6 +160,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0.1,
+      loyaltyBonus: 0,
     });
     expect(discounted).toBeLessThan(noDiscount);
   });
@@ -170,6 +176,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     const heavy = calculatePay({
       distanceNm: 100,
@@ -181,6 +188,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     const light = calculatePay({
       distanceNm: 100,
@@ -192,6 +200,7 @@ describe("calculatePay", () => {
       isRemoteDestination: false,
       basePayMultiplier: 1,
       familiarityDiscount: 0,
+      loyaltyBonus: 0,
     });
     expect(heavy).toBeGreaterThan(baseline);
     expect(light).toBe(baseline);
@@ -218,6 +227,63 @@ describe("generateClientJobs reputation gating", () => {
     expect(jobs.length).toBeGreaterThan(0);
     expect(jobs[0]!.clientId).toBe("maritime_cargo");
     expect(jobs[0]!.role).toBe("bush");
+  });
+});
+
+describe("generateClientJobs reputation payoff", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("bakes the loyalty pay bonus into client jobs at top standing", () => {
+    const client = ALL_CLIENTS.find((c) => c.id === "maritime_cargo")!;
+    // Full-day window → both runs clamp to MAX_CLIENT_JOBS_PER_GEN (3) and
+    // consume the rng identically, so the only difference is the loyalty bonus.
+    const base = generateClientJobs(
+      client,
+      makeCtx({
+        reputationByClient: {},
+        genElapsedMs: DAY,
+        rng: seedrandom("loyalty-seed"),
+      }),
+    );
+    const loyal = generateClientJobs(
+      client,
+      makeCtx({
+        reputationByClient: { maritime_cargo: 100 }, // top → +30%
+        genElapsedMs: DAY,
+        rng: seedrandom("loyalty-seed"),
+      }),
+    );
+    expect(base.length).toBe(3);
+    expect(loyal.length).toBe(3);
+    for (let i = 0; i < base.length; i++) {
+      // Same underlying job (route unchanged) — only the pay differs.
+      expect(loyal[i]!.destinationIcao).toBe(base[i]!.destinationIcao);
+      expect(loyal[i]!.pay / base[i]!.pay).toBeCloseTo(1.3, 2);
+    }
+  });
+
+  it("priority work: top standing raises a client's job frequency", () => {
+    const client = ALL_CLIENTS.find((c) => c.id === "maritime_cargo")!;
+    // 8h window: novice expects 6 × (8/24) = 2 jobs; top expects ×1.5 = 3.
+    const window = 8 * 60 * 60 * 1000;
+    const novice = generateClientJobs(
+      client,
+      makeCtx({
+        reputationByClient: {},
+        genElapsedMs: window,
+        rng: seedrandom("freq-seed"),
+      }),
+    );
+    const loyal = generateClientJobs(
+      client,
+      makeCtx({
+        reputationByClient: { maritime_cargo: 100 },
+        genElapsedMs: window,
+        rng: seedrandom("freq-seed"),
+      }),
+    );
+    expect(novice.length).toBe(2);
+    expect(loyal.length).toBe(3);
   });
 });
 

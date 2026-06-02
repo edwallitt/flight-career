@@ -100,6 +100,8 @@ function seedFirstFlightJob(simNow: number): void {
     isRemoteDestination: false,
     basePayMultiplier: 8.0,
     familiarityDiscount: 0,
+    // Brand-new career → no standing with Maritime Cargo yet.
+    loyaltyBonus: 0,
   });
 
   db.insert(jobs)

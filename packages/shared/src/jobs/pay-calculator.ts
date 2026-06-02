@@ -14,6 +14,9 @@ export interface PayInputs {
   isRemoteDestination: boolean;
   basePayMultiplier: number;
   familiarityDiscount: number;
+  // Per-client loyalty bonus from reputation standing (0 = none). Applied as a
+  // pay *increase* — see loyaltyBonusForScore in ../career/reputation.ts.
+  loyaltyBonus: number;
 }
 
 const CLASS_RATE_PER_NM: Record<AircraftClass, number> = {
@@ -58,6 +61,7 @@ export function calculatePay(inputs: PayInputs): number {
 
   pay *= inputs.basePayMultiplier;
   pay *= 1 - inputs.familiarityDiscount;
+  pay *= 1 + inputs.loyaltyBonus;
 
   return Math.round(pay) * 100;
 }

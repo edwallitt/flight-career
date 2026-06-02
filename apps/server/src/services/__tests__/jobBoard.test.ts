@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../../db/client.js";
-import { career, jobs } from "../../db/schema.js";
+import { career, jobs, reputation } from "../../db/schema.js";
 import {
   getCareer,
   insertJob,
@@ -192,6 +192,25 @@ describe("getOpenJobs", () => {
     const list = getOpenJobs();
     expect(list[0]!.clientName).toBeTruthy();
     expect(list[0]!.clientId).toBe("maritime_cargo");
+  });
+
+  it("tags client jobs with the player's standing tier; open-market jobs get null", () => {
+    db.insert(reputation)
+      .values({ scope: "client:maritime_cargo", score: 70, updatedAt: 0 })
+      .run();
+    insertJob({ clientId: "maritime_cargo", role: "bush" });
+    // insertJob coerces a passed null back to its default client, so null the
+    // open-market job out explicitly after insert.
+    const openJob = insertJob({ role: "open" });
+    db.update(jobs).set({ clientId: null }).where(eq(jobs.id, openJob.id)).run();
+
+    const list = getOpenJobs();
+    const client = list.find((j) => j.clientId === "maritime_cargo");
+    const open = list.find((j) => j.role === "open");
+    // score 70 → High tier.
+    expect(client?.clientStanding).toEqual({ tier: "high", score: 70 });
+    // No client relationship → no standing.
+    expect(open?.clientStanding).toBeNull();
   });
 
 });
