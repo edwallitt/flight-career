@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import {
   formatPay,
   formatPayloadType,
@@ -594,18 +595,18 @@ function EmptyState({
             </span>
             {isTicking ? "Ticking…" : "Force dispatch"}
           </button>
-          <a
-            href="/marketplace"
+          <Link
+            to="/market"
             className="inline-flex items-center gap-2 rounded-sm border border-ink-600 bg-ink-800 px-3 py-2 font-mono text-[11px] uppercase tracking-callsign text-text hover:border-amber-deep hover:text-amber-glow"
           >
             Marketplace
-          </a>
-          <a
-            href="/atlas"
+          </Link>
+          <Link
+            to="/map"
             className="inline-flex items-center gap-2 rounded-sm border border-ink-600 bg-ink-800 px-3 py-2 font-mono text-[11px] uppercase tracking-callsign text-text hover:border-amber-deep hover:text-amber-glow"
           >
             Atlas
-          </a>
+          </Link>
         </div>
       </div>
     </div>

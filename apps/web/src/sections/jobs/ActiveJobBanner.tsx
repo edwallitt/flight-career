@@ -10,8 +10,10 @@ type ActiveJob = NonNullable<JobBoardResult["activeJob"]>;
 // below shifts context to "after you arrive at X" so the visual link is
 // important.
 //
-// Click anywhere on the banner to jump to the active-job surface
-// (/current). Kept link-flavoured rather than a button for muscle memory.
+// Click anywhere on the banner to open the active-job surface. That surface
+// is an overlay (App-level `setOverlay("current")`), not a route, so this is
+// a button that calls back up — matching the header's ActiveJobPill. Kept
+// link-flavoured styling for muscle memory.
 
 const STATE_LABEL: Record<ActiveJob["state"], string> = {
   accepted: "Accepted",
@@ -27,15 +29,18 @@ const STATE_TONE: Record<ActiveJob["state"], string> = {
 
 export function ActiveJobBanner({
   activeJob,
+  onOpen,
 }: {
   activeJob: ActiveJob | null;
+  onOpen: () => void;
 }) {
   if (!activeJob) return null;
   const idStr = `#${activeJob.jobId.toString().padStart(5, "0")}`;
   return (
-    <a
-      href="/current"
-      className="group flex items-center gap-4 border-b border-ink-600 bg-ink-850/80 px-6 py-2.5 transition-colors hover:bg-ink-800/70"
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full items-center gap-4 border-b border-ink-600 bg-ink-850/80 px-6 py-2.5 text-left transition-colors hover:bg-ink-800/70"
       aria-label={`Working on job ${idStr} to ${activeJob.destinationIcao}. Open current-job surface.`}
     >
       <span
@@ -91,6 +96,6 @@ export function ActiveJobBanner({
       >
         Open ▸
       </span>
-    </a>
+    </button>
   );
 }

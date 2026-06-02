@@ -37,6 +37,44 @@ describe("getSalePreview", () => {
     expect(result.preview.eligibility.eligible).toBe(true);
   });
 
+  // Regression: the annual inspection is calendar-based (annualDueAt is the
+  // canonical clock). Sale pricing must derive days-since-annual from that
+  // anchor, NOT from the stored owned_aircraft.hoursSinceAnnual column — which
+  // for owned aircraft accumulates block *hours* and is frozen at last flight.
+  // An aircraft with an OVERDUE annual but a low stored column must still be
+  // priced down (due-soon discount), never up.
+  it("prices an overdue-annual aircraft below a fresh-annual one regardless of the stored hoursSinceAnnual column", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const now = getCareer().simDateTime;
+
+    // Fresh annual (due ~360 days out → ~5 days since), but a HIGH stored
+    // column. Under the old block-hours bug the high column would read as
+    // "mid-life" (no premium); the calendar-correct value is a fresh-annual
+    // premium.
+    const fresh = insertOwnedAircraft({
+      currentLocationIcao: MAINTENANCE_AIRPORT,
+      annualDueAt: now + 360 * DAY,
+      hoursSinceAnnual: 300,
+    });
+    // Overdue annual (40 days past due → 405 days since), but a LOW stored
+    // column. Under the old bug the low column (<90) would read as "fresh"
+    // and earn a premium; calendar-correct it must take the due-soon discount.
+    const overdue = insertOwnedAircraft({
+      currentLocationIcao: MAINTENANCE_AIRPORT,
+      annualDueAt: now - 40 * DAY,
+      hoursSinceAnnual: 5,
+    });
+
+    const freshPreview = getSalePreview({ ownedAircraftId: fresh.id });
+    const overduePreview = getSalePreview({ ownedAircraftId: overdue.id });
+    expect(freshPreview.ok && overduePreview.ok).toBe(true);
+    if (!freshPreview.ok || !overduePreview.ok) return;
+
+    expect(overduePreview.preview.estimate.estimatedValueCents).toBeLessThan(
+      freshPreview.preview.estimate.estimatedValueCents,
+    );
+  });
+
   it("flags ineligible at non-maintenance airports", () => {
     // CYCH is the small/remote airport in seed data without maintenance.
     const cych = db

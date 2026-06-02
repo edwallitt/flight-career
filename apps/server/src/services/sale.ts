@@ -15,6 +15,7 @@ import {
   ownedAircraft,
 } from "../db/schema.js";
 import {
+  daysSinceAnnualForPricing,
   getOwnedAircraftById,
   type OwnedAircraftDetail,
 } from "./hangar.js";
@@ -68,7 +69,10 @@ export function getSalePreview(input: {
       airframeHours: aircraft.airframeHours,
       engineHoursSinceOverhaul: aircraft.engineHoursSinceOverhaul,
       hoursSince100hr: aircraft.hoursSince100hr,
-      hoursSinceAnnual: aircraft.hoursSinceAnnual,
+      hoursSinceAnnual: daysSinceAnnualForPricing(
+        aircraft.annualDueAt,
+        careerRow.simDateTime,
+      ),
     },
     loan: loanForSale,
   });
@@ -151,7 +155,10 @@ export function executeSale(input: {
         airframeHours: owned.airframeHours,
         engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
         hoursSince100hr: owned.hoursSince100hr,
-        hoursSinceAnnual: owned.hoursSinceAnnual,
+        hoursSinceAnnual: daysSinceAnnualForPricing(
+          owned.annualDueAt,
+          careerRow.simDateTime,
+        ),
       },
       loan: loanForSale,
     });

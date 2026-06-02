@@ -20,6 +20,20 @@ import { fuelPriceCentsPerGal } from "./jobLifecycle.js";
 
 const SIM_DAY_MS = 24 * 60 * 60 * 1000;
 
+// True days-since-last-annual for an OWNED aircraft, derived from the
+// annualDueAt anchor (the canonical annual clock). Do NOT price owned aircraft
+// off the stored owned_aircraft.hoursSinceAnnual column: for owned aircraft
+// that column accumulates block *hours* (wrong unit) and is frozen at the last
+// flight, while the annual is calendar-based and advances with sim time.
+// Inverts seed.ts / purchase.ts (annualDueAt = simNow + (365 - days) * day),
+// so a fresh annual reads ~0 and an overdue one reads >365. Clamped at 0.
+export function daysSinceAnnualForPricing(
+  annualDueAt: number,
+  simNow: number,
+): number {
+  return Math.max(0, 365 - (annualDueAt - simNow) / SIM_DAY_MS);
+}
+
 export interface OwnedLoanInfo {
   id: number;
   principalCents: number;
@@ -121,7 +135,7 @@ function buildDetail(
     airframeHours: owned.airframeHours,
     engineHoursSinceOverhaul: owned.engineHoursSinceOverhaul,
     tboHours: type.tboHours,
-    hoursSinceAnnual: owned.hoursSinceAnnual,
+    hoursSinceAnnual: daysSinceAnnualForPricing(owned.annualDueAt, simNow),
     hoursSince100hr: owned.hoursSince100hr,
     conditionGrade: "good",
   });

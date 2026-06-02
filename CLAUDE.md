@@ -55,9 +55,15 @@ runs `tsc -b`).
   - Real time (`Date.now()`) — used for `lastPlayedAt`, ticker scheduling.
   - **Sim time** (`career.simDateTime`) — what the player experiences. Always
     UTC. The shared generator's `simNow` is sim time.
-- **Each tick advances sim time by 30 minutes.** This is load-bearing — without
-  it, jobs never expire and the open-market top-up stops working. Set in
-  `apps/server/src/services/jobBoard.ts`.
+- **The world clock runs at 1× real time and is persistent.** Each tick sets
+  `simDateTime += (Date.now() − lastClockSyncReal)` (`jobBoard.ts:430-432`), so
+  sim time tracks wall-clock 1:1 and the offline gap is absorbed on the first
+  tick after boot. `Math.max(0, …)` guards a backwards real clock. The 30-second
+  `setInterval` (`index.ts`) is just the *sync cadence*, not a fixed sim-time
+  step. Because the clock only ever folds in real elapsed and never reabsorbs an
+  injected jump, **do not write `simDateTime` directly to "advance" it** (e.g.
+  for travel) — a one-off bump desyncs the delta math permanently. See
+  `transfers_instantaneous` in auto-memory.
 - **The shared package has zero I/O.** No DB, no fetch, no `Math.random()`.
   Every random branch goes through the injected `ctx.rng`. Keep it that way —
   it's why generator tests are deterministic.
@@ -83,10 +89,16 @@ Lives in `packages/shared/src/jobs/`. Three files:
   The server (`services/jobBoard.ts`) is responsible for persisting them and
   advancing sim time. The engine itself never touches the DB.
 
-Engine assumes 48 ticks/day. `probPerTick = baseJobsPerDay × seasonal[month] /
-48`. Premium templates unlock at `repInRole >= (gateMin + gateMax) / 2`, then
-fire 25% of the time when unlocked. Open-market top-up is capped at +3/tick to
-avoid flooding.
+Generation is **elapsed-based**, not per-tick. Each client's expected jobs for
+a pass is `baseJobsPerDay × seasonal[month] × (genElapsedMs / DAY_MS)`
+(`generator.ts:254`), where `genElapsedMs` is the world-time since the last
+generation point, clamped to `MAX_GEN_ELAPSED_MS` (6h) so a long absence or an
+abstracted-travel jump can't carpet the board. The fractional expectation is
+sampled (whole part fires, fraction is a coin flip) and bounded per client. At
+1× real time a 30s background tick yields ≈ `expectedPerDay × 30s/day` — so most
+ticks produce nothing and a client surfaces work every few hours. Premium
+templates unlock at `repInRole >= (gateMin + gateMax) / 2`, then fire 25% of the
+time when unlocked. Open-market top-up is capped at +3/tick to avoid flooding.
 
 Tests: `packages/shared/src/jobs/__tests__/generator.test.ts` use `seedrandom`
 for deterministic fixtures.
@@ -181,14 +193,28 @@ cover.
 
 ## What's intentionally stubbed
 
-- Job acceptance flow — drawer button is `alert(…)`. Server side has no
-  acceptance procedure.
-- Aircraft selection / dispatch — no rental flow, no fuel/range checks.
-- `/hangar`, `/career`, `/logbook`, `/map` routes — `<ComingSoon />`.
-- Settings cog in the header — `alert(…)`.
-- Familiarity discount — passed to `calculatePay` but always 0 from the
-  engine. The `reputationByClient` field is wired through `GenerationContext`
-  for future use (premium gating, negotiation).
+Most of what this section used to list is now fully built: job acceptance,
+aircraft selection/dispatch, the brief → begin → complete lifecycle, travel,
+hangar, marketplace, maintenance, insurance, and every route (`/hangar`,
+`/career`, `/logbook`, `/map`, `/market`, `/settings`) are live. There are no
+`alert(…)` stubs left in `apps/web`, and `ComingSoon` is no longer routed
+(component retained but dead). What genuinely remains inert:
+
+- **Familiarity discount** — passed to `calculatePay` but hardcoded to 0 at
+  both generator call sites (`generator.ts`). `reputationByClient` is wired
+  through `GenerationContext` for future use (premium gating, negotiation) but
+  doesn't affect pay yet.
+- **Rating exams resolve instantly** — `bookExam` (`services/career.ts`) grants
+  the rating on payment of the fee once hour gates are met. The `rating_exams`
+  scheduling schema (`scheduledFor`, `examLeadDays`, booked/failed states) is
+  scaffolded but short-circuited; there's no wait or fail roll.
+- **Manual completion is honor-system** — in untracked mode the player
+  self-reports block time and destination; only the (optional, external)
+  SimBridge WebSocket path is authoritative.
+- **Vestigial `owned_aircraft.hoursSinceAnnual`** — `annualDueAt` is the
+  canonical annual clock; the owned column accumulates block hours and is no
+  longer read for owned-aircraft risk/pricing (those derive days from
+  `annualDueAt`). A schema-level removal is a tracked follow-up.
 
 ## Auto memory
 

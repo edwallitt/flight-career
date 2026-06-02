@@ -639,6 +639,13 @@ export function completeFlightAction(
       const newEngineSinceOH =
         ownedAircraftRow.engineHoursSinceOverhaul + upd.blockHoursAdded;
       const newSince100 = ownedAircraftRow.hoursSince100hr + upd.blockHoursAdded;
+      // NOTE: the annual inspection is calendar-based — `annualDueAt` is the
+      // canonical clock and the only source consumers should derive days-since
+      // -annual from (risk paths and pricing both do; see
+      // daysSinceAnnualForPricing in hangar.ts). This column is a vestigial
+      // counter for owned aircraft and is NOT a reliable days value; do not
+      // price or risk-assess owned aircraft off it. (Vestigial-column cleanup
+      // is a tracked follow-up.)
       const newSinceAnnual =
         ownedAircraftRow.hoursSinceAnnual + upd.blockHoursAdded;
       const newFuel = Math.max(

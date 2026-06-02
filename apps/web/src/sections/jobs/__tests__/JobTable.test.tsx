@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { JobTable } from "../JobTable.js";
 import type { JobRow, SortState } from "../types.js";
@@ -69,7 +70,13 @@ function renderTable(
     onClearFilters: vi.fn(),
     ...overrides,
   };
-  render(<JobTable {...props} />);
+  // JobTable's empty state renders react-router <Link>s, so it needs a router
+  // context.
+  render(
+    <MemoryRouter>
+      <JobTable {...props} />
+    </MemoryRouter>,
+  );
   return props;
 }
 

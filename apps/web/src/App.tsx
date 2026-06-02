@@ -52,13 +52,19 @@ export default function App() {
         <main className="relative min-h-0 flex-1 overflow-hidden">
           <Routes>
             <Route path="/" element={<Navigate to="/jobs" replace />} />
-            <Route path="/jobs" element={<JobBoard />} />
+            <Route
+              path="/jobs"
+              element={
+                <JobBoard onOpenActiveJob={() => setOverlay("current")} />
+              }
+            />
             <Route path="/hangar" element={<Hangar />} />
             <Route path="/market" element={<Marketplace />} />
             <Route path="/career" element={<Career />} />
             <Route path="/logbook" element={<Logbook />} />
             <Route path="/map" element={<Atlas />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/jobs" replace />} />
           </Routes>
         </main>
       </div>

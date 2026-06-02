@@ -68,7 +68,7 @@ function parseSort(raw: string | null): SortState {
   return DEFAULT_SORT;
 }
 
-export function JobBoard() {
+export function JobBoard({ onOpenActiveJob }: { onOpenActiveJob: () => void }) {
   // URL is the source of truth for filters. setSearchParams is the one
   // setter we route everything through; React state is derived via useMemo
   // so we don't double-store anything.
@@ -267,7 +267,7 @@ export function JobBoard() {
 
       {/* Active-job banner — renders only when the player is mid-flight on
           a contract. Keeps the board honest about what state they're in. */}
-      <ActiveJobBanner activeJob={activeJob} />
+      <ActiveJobBanner activeJob={activeJob} onOpen={onOpenActiveJob} />
 
       {/* "What should I fly next?" — surfaced from the server's
           recommendedJobId pick. Pivots context when mid-flight to "after

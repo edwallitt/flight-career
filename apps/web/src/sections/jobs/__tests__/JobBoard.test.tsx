@@ -95,7 +95,7 @@ function seedDefaults(
 
 describe("JobBoard — rendering", () => {
   it("renders the header, fuel-shock banner placeholder, and filters", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, []);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
@@ -108,7 +108,7 @@ describe("JobBoard — rendering", () => {
   });
 
   it("renders one row per job and surfaces the JobTable", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [
           makeJob({ id: 1, clientName: "Maritime Cargo Express" }),
@@ -128,7 +128,7 @@ describe("JobBoard — rendering", () => {
   });
 
   it("renders the empty-state when no jobs are open", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, []);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
@@ -142,7 +142,7 @@ describe("JobBoard — rendering", () => {
   });
 
   it("renders the fuel-shock banner when a headline shock is active", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, []);
         h.seedQuery(["fuel", "activeShocks"], {
@@ -168,7 +168,7 @@ describe("JobBoard — rendering", () => {
 
 describe("JobBoard — recommendation card", () => {
   it("renders the Recommended-next card when the server picks a recommendedJobId", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(
           h,
@@ -192,7 +192,7 @@ describe("JobBoard — recommendation card", () => {
   });
 
   it("clicking Open briefing selects the recommended job into the drawer", async () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(
           h,
@@ -222,7 +222,7 @@ describe("JobBoard — recommendation card", () => {
   });
 
   it("renders nothing when recommendedJobId is null", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [makeJob({ id: 1 })], { recommendedJobId: null });
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
@@ -238,7 +238,7 @@ describe("JobBoard — deep-link via ?jobId=", () => {
   // board with nothing selected and has to re-find their job — the exact
   // problem the deep link is meant to solve.
   it("auto-selects the row matching ?jobId= on mount", async () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       route: "/jobs?jobId=42",
       seed: (h) => {
         seedDefaults(h, [
@@ -259,7 +259,7 @@ describe("JobBoard — deep-link via ?jobId=", () => {
   });
 
   it("falls back to no selection when ?jobId= isn't a positive number", () => {
-    const { container } = renderWithProviders(<JobBoard />, {
+    const { container } = renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       route: "/jobs?jobId=not-a-number",
       seed: (h) => {
         seedDefaults(h, [makeJob({ id: 1 })]);
@@ -276,7 +276,7 @@ describe("JobBoard — deep-link via ?jobId=", () => {
 
 describe("JobBoard — filter wiring", () => {
   it("switching origin scope to 'All' surfaces a locked row that 'Flyable' hides", async () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [
           makeJob({
@@ -303,7 +303,7 @@ describe("JobBoard — filter wiring", () => {
   });
 
   it("origin scope 'At CYHZ' restricts to rows whose origin matches playerLocationIcao", async () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [
           makeJob({ id: 1, clientName: "Local Co", originIcao: "CYHZ" }),
@@ -323,7 +323,7 @@ describe("JobBoard — filter wiring", () => {
   });
 
   it("role=OPN shows only open-market jobs but ferry jobs are always visible", async () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [
           makeJob({ id: 1, clientName: "Standard Job", role: "open" }),
@@ -349,7 +349,7 @@ describe("JobBoard — filter wiring", () => {
 
 describe("JobBoard — active-job awareness", () => {
   it("renders ActiveJobBanner when activeJob is set on the response", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [makeJob({ id: 1 })], {
           activeJob: {
@@ -375,7 +375,7 @@ describe("JobBoard — active-job awareness", () => {
   });
 
   it("captions the recommendation card 'after arrival' when activeJob is set", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(
           h,
@@ -409,7 +409,7 @@ describe("JobBoard — active-job awareness", () => {
   });
 
   it("renders no banner when activeJob is null", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, [makeJob({ id: 1 })]);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
@@ -425,7 +425,7 @@ describe("JobBoard — URL-persisted filters", () => {
   // them back on change. Defaults are omitted from the URL to keep it tidy.
 
   it("seeds origin scope, role, and sort from URL params on mount", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       route: "/jobs?origin=here&role=bush&sort=expires:asc",
       seed: (h) => {
         seedDefaults(h, [
@@ -452,7 +452,7 @@ describe("JobBoard — URL-persisted filters", () => {
   it("writes non-default filters back into the URL when toggled", async () => {
     renderWithProviders(
       <>
-        <JobBoard />
+        <JobBoard onOpenActiveJob={() => {}} />
         <LocationProbe />
       </>,
       {
@@ -475,7 +475,7 @@ describe("JobBoard — URL-persisted filters", () => {
   it("strips the param when a filter returns to its default", async () => {
     renderWithProviders(
       <>
-        <JobBoard />
+        <JobBoard onOpenActiveJob={() => {}} />
         <LocationProbe />
       </>,
       {
@@ -497,7 +497,7 @@ describe("JobBoard — URL-persisted filters", () => {
   });
 
   it("falls back to defaults when URL params are malformed", () => {
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       route: "/jobs?origin=bogus&role=nope&sort=junk",
       seed: (h) => {
         seedDefaults(h, []);
@@ -523,7 +523,7 @@ describe("JobBoard — force tick mutation", () => {
       value: { ...window.location, search: "?dev=1" },
     });
     const tickHandler = vi.fn(() => ({ inserted: 2, expired: 1 }));
-    renderWithProviders(<JobBoard />, {
+    renderWithProviders(<JobBoard onOpenActiveJob={() => {}} />, {
       seed: (h) => {
         seedDefaults(h, []);
         h.seedQuery(["fuel", "activeShocks"], { shocks: [], headline: null });
