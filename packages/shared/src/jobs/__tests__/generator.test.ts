@@ -10,7 +10,12 @@ import {
   type AirportLite,
   type GenerationContext,
 } from "../generator.js";
-import { calculatePay } from "../pay-calculator.js";
+import {
+  calculatePay,
+  familiarityDiscountForCount,
+  MAX_FAMILIARITY_DISCOUNT,
+  routeKey,
+} from "../pay-calculator.js";
 
 const FIXTURE_AIRPORTS: AirportLite[] = [
   { icao: "CYHZ", lat: 44.8808, lon: -63.5086, size: "major", hasPavedRunway: true },
@@ -360,5 +365,161 @@ describe("runGenerationTick determinism", () => {
     const openJobs = jobs.filter((j) => j.role === "open");
     expect(openJobs.length).toBeGreaterThan(0);
     expect(openJobs.length).toBeLessThanOrEqual(3);
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+describe("familiarityDiscountForCount", () => {
+  it("is zero for an unflown route", () => {
+    expect(familiarityDiscountForCount(0)).toBe(0);
+    expect(familiarityDiscountForCount(-3)).toBe(0);
+  });
+
+  it("grows per recent flight and caps", () => {
+    expect(familiarityDiscountForCount(1)).toBeCloseTo(0.03);
+    expect(familiarityDiscountForCount(3)).toBeCloseTo(0.09);
+    expect(familiarityDiscountForCount(100)).toBe(MAX_FAMILIARITY_DISCOUNT);
+  });
+});
+
+describe("runGenerationTick familiarity discount", () => {
+  it("pays less for an over-flown route than a fresh one (same client)", () => {
+    // Force a single maritime_cargo job and compare pay with vs without recent
+    // flights on the route it lands on. We drive the same seed both ways so the
+    // route/payload are identical; only routeFlightCounts differs.
+    const maritime = ALL_CLIENTS.find((c) => c.id === "maritime_cargo")!;
+    const base = generateClientJobs(
+      maritime,
+      makeCtx({ genElapsedMs: DAY, rng: seedrandom("fam") }),
+    );
+    expect(base.length).toBeGreaterThan(0);
+    const sample = base[0]!;
+    const counts = { [routeKey(sample.originIcao, sample.destinationIcao)]: 5 };
+    const discounted = generateClientJobs(
+      maritime,
+      makeCtx({
+        genElapsedMs: DAY,
+        rng: seedrandom("fam"),
+        routeFlightCounts: counts,
+      }),
+    );
+    const sameRoute = discounted.find(
+      (j) =>
+        j.originIcao === sample.originIcao &&
+        j.destinationIcao === sample.destinationIcao,
+    )!;
+    expect(sameRoute).toBeDefined();
+    expect(sameRoute.pay).toBeLessThan(sample.pay);
+  });
+});
+
+describe("runGenerationTick board ceiling", () => {
+  it("adds nothing when the board is already at the ceiling (no home floor)", () => {
+    // Saturated board, no deficit, no player location → no branded, no
+    // open-market, no overshoot. Holds regardless of rng.
+    const ctx = makeCtx({
+      currentBoardSize: 14,
+      targetBoardSize: 12,
+      maxBoardSize: 14,
+      genElapsedMs: DAY, // would fire plenty of branded if uncapped
+    });
+    expect(runGenerationTick(ALL_CLIENTS, ctx)).toEqual([]);
+  });
+
+  it("admits branded only up to the ceiling's remaining headroom", () => {
+    const ctx = makeCtx({
+      currentBoardSize: 13,
+      targetBoardSize: 12,
+      maxBoardSize: 14,
+      genElapsedMs: DAY,
+      rng: seedrandom("ceiling"),
+    });
+    // 1 slot of headroom; no player location so no home overshoot.
+    expect(runGenerationTick(ALL_CLIENTS, ctx).length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("runGenerationTick flyable-class bias", () => {
+  it("keeps unflyable branded out once the board is at target", () => {
+    // Board already at target → the aspirational band (below target) is full,
+    // so only flyable client work may be admitted into the headroom above it.
+    const ctx = makeCtx({
+      currentBoardSize: 12,
+      targetBoardSize: 12,
+      maxBoardSize: 20,
+      genElapsedMs: DAY,
+      playerAvailableClasses: ["SEP"],
+      rng: seedrandom("flyable"),
+    });
+    const jobs = runGenerationTick(ALL_CLIENTS, ctx);
+    const branded = jobs.filter((j) => j.role !== "open");
+    expect(branded.length).toBeGreaterThan(0); // path is exercised
+    for (const j of branded) expect(j.requiredClass).toBe("SEP");
+  });
+});
+
+describe("runGenerationTick branded floor", () => {
+  it("force-surfaces flyable branded up to the floor on a fresh board", () => {
+    // Tiny elapsed window → the natural branded trickle is ~0, so reaching the
+    // floor proves the forced top-up fired. Early-game rep, SEP-only player.
+    const ctx = makeCtx({
+      currentBoardSize: 0,
+      targetBoardSize: 12,
+      maxBoardSize: 14,
+      minBrandedJobs: 3,
+      brandedJobCount: 0,
+      genElapsedMs: 30 * 1000,
+      reputationByRole: { bush: 25, air_taxi: 5, light_jet: 0 },
+      playerAvailableClasses: ["SEP"],
+      rng: seedrandom("floor"),
+    });
+    const jobs = runGenerationTick(ALL_CLIENTS, ctx);
+    const flyableBranded = jobs.filter(
+      (j) => j.role !== "open" && j.requiredClass === "SEP",
+    );
+    expect(flyableBranded.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not top up when the board already meets the floor", () => {
+    const ctx = makeCtx({
+      currentBoardSize: 8,
+      targetBoardSize: 12,
+      maxBoardSize: 14,
+      minBrandedJobs: 3,
+      brandedJobCount: 3, // floor already satisfied by jobs on the board
+      genElapsedMs: 30 * 1000,
+      reputationByRole: { bush: 25, air_taxi: 5, light_jet: 0 },
+      playerAvailableClasses: ["SEP"],
+      rng: seedrandom("nofloor"),
+    });
+    // With a 30s window and the floor met, branded output should be ~none; any
+    // jobs are the open-market deficit fill toward target.
+    const jobs = runGenerationTick(ALL_CLIENTS, ctx);
+    expect(jobs.every((j) => j.role === "open")).toBe(true);
+  });
+});
+
+describe("runGenerationTick home-origin floor", () => {
+  it("guarantees home departures even when the board is at the ceiling", () => {
+    // Player just repositioned to CYAW: board full of non-home work, zero home
+    // jobs. The home floor must overshoot the ceiling to un-strand them.
+    const ctx = makeCtx({
+      currentBoardSize: 14,
+      targetBoardSize: 12,
+      maxBoardSize: 14,
+      genElapsedMs: 30 * 1000,
+      playerLocationIcao: "CYAW",
+      homeOriginJobCount: 0,
+      rng: seedrandom("stranded"),
+    });
+    const jobs = runGenerationTick(ALL_CLIENTS, ctx);
+    const homeOpen = jobs.filter(
+      (j) => j.role === "open" && j.originIcao === "CYAW",
+    );
+    expect(homeOpen.length).toBe(3); // MIN_HOME_ORIGIN_JOBS, the bounded overshoot
+    // Branded admission is shut off at the ceiling, so the only additions are
+    // the forced home jobs.
+    expect(jobs.length).toBe(3);
   });
 });

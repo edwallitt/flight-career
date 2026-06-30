@@ -2,9 +2,11 @@ import {
   ALL_CLIENTS,
   computeJobFit,
   computeReachability,
+  FAMILIARITY_WINDOW_SIM_DAYS,
   generateFerryJob,
   getClientById,
   haversineNm,
+  routeKey,
   pickRecommendedJobId,
   reputationTier,
   runGenerationTick,
@@ -22,12 +24,13 @@ import {
   type Role,
   priceFerryLeg,
 } from "@flightcareer/shared";
-import { and, count, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, count, eq, gte, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "../db/client.js";
 import {
   aircraftTypes,
   airports,
   career,
+  flights,
   fuelPriceCurrent,
   jobs,
   ownedAircraft,
@@ -43,6 +46,20 @@ import {
 
 const TARGET_BOARD_SIZE = 12;
 
+// Soft ceiling on the open board. Branded jobs are inserted unconditionally and
+// persist far longer than open-market work (24–72h vs 4h), so without a ceiling
+// the board accumulates well past the target — measured at 20–26 jobs in steady
+// state. The generator caps branded + deficit-fill at this; only the home-origin
+// floor may briefly overshoot it (and drains back as open-market jobs expire).
+const MAX_BOARD_SIZE = 14;
+
+// Floor on flyable branded jobs the board should surface. A brand-new save has
+// no accumulated client work and the elapsed-based trickle is slow, so the first
+// session would otherwise be a wall of anonymous open-market jobs. The generator
+// force-surfaces flyable client work up to this floor from eligible, in-season
+// clients. A no-op once branded work has accumulated past it.
+const MIN_BRANDED_JOBS = 3;
+
 // The world clock runs at 1× wall-clock time: each tick advances simDateTime
 // by the real time elapsed since the last sync (Date.now() - lastClockSyncReal),
 // so the world keeps moving whether the server is up or not — the first tick
@@ -54,6 +71,8 @@ const TARGET_BOARD_SIZE = 12;
 // window here; the size-capped open-market top-up refills the board the rest
 // of the way over the next few ticks.
 const MAX_GEN_ELAPSED_MS = 6 * 60 * 60 * 1000;
+
+const SIM_DAY_MS = 24 * 60 * 60 * 1000;
 
 // Ferries are their own content lane — they let the player fly (and get paid
 // for) aircraft they don't own, so they should be a visible, persistent fixture
@@ -142,6 +161,52 @@ function homeOriginJobCount(playerLocationIcao: string): number {
     .where(and(eq(jobs.status, "open"), eq(jobs.originIcao, playerLocationIcao)))
     .get();
   return row?.n ?? 0;
+}
+
+// Count of flyable branded jobs currently on the board — open client jobs whose
+// required class the player can fly right now. Paired with MIN_BRANDED_JOBS so
+// the generator's branded floor only tops up the genuine shortfall. When the
+// player has no flyable classes (availableClasses undefined), every branded job
+// counts, matching the generator's "flyable = anything" fallback.
+function flyableBrandedJobCount(
+  availableClasses: AircraftClass[] | undefined,
+): number {
+  const filters = [
+    eq(jobs.status, "open"),
+    isNotNull(jobs.clientId),
+    ...(availableClasses && availableClasses.length > 0
+      ? [inArray(jobs.requiredClass, availableClasses)]
+      : []),
+  ];
+  const row = db
+    .select({ n: count() })
+    .from(jobs)
+    .where(and(...filters))
+    .get();
+  return row?.n ?? 0;
+}
+
+// Player's recent flight count per directed route, for the familiarity ("milk
+// run") pay discount. Counts flights that ended within the familiarity window
+// off sim time, keyed by `routeKey(origin, dest)`. The generator turns each
+// count into a discount; routes the player hasn't flown recently stay at full
+// pay. Diversions count toward the route they were *dispatched* on (origin →
+// planned destination), which is what the player chose to over-fly.
+export function loadRouteFlightCounts(simNow: number): Record<string, number> {
+  const windowStart = simNow - FAMILIARITY_WINDOW_SIM_DAYS * SIM_DAY_MS;
+  const rows = db
+    .select({
+      origin: flights.originIcao,
+      destination: flights.destinationIcao,
+      n: count(),
+    })
+    .from(flights)
+    .where(gte(flights.endedAt, windowStart))
+    .groupBy(flights.originIcao, flights.destinationIcao)
+    .all();
+  const counts: Record<string, number> = {};
+  for (const r of rows) counts[routeKey(r.origin, r.destination)] = r.n;
+  return counts;
 }
 
 // Classes the player can actually fly right now: any aircraft they own that
@@ -478,6 +543,10 @@ export function tickJobGeneration(): TickResult {
     // reserves their space instead of crowding them out.
     currentBoardSize: currentBoardSize(),
     targetBoardSize: TARGET_BOARD_SIZE,
+    maxBoardSize: MAX_BOARD_SIZE,
+    minBrandedJobs: MIN_BRANDED_JOBS,
+    brandedJobCount: flyableBrandedJobCount(playerAvailableClasses),
+    routeFlightCounts: loadRouteFlightCounts(simNow),
     playerLocationIcao,
     homeOriginJobCount: homeOriginJobCount(playerLocationIcao),
     playerAvailableClasses,

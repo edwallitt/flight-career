@@ -12,7 +12,11 @@ import {
   loyaltyBonusForScore,
 } from "../career/reputation.js";
 import { haversineNm } from "./distance.js";
-import { calculatePay } from "./pay-calculator.js";
+import {
+  calculatePay,
+  familiarityDiscountForCount,
+  routeKey,
+} from "./pay-calculator.js";
 
 export interface AirportLite {
   icao: string;
@@ -51,10 +55,33 @@ export interface GenerationContext {
   // Aircraft classes the player can actually fly right now — union of owned
   // aircraft classes and rental classes available at their current airport.
   // When set, the open-market generator biases its class roll toward these
-  // so a starter SEP pilot doesn't see a board full of jet contracts. Pass
+  // so a starter SEP pilot doesn't see a board full of jet contracts, and the
+  // client-job admission biases the same way (see `runGenerationTick`). Pass
   // undefined (or omit) to keep the old uniform-by-weight behaviour, which
   // is what the seed pre-warm and unit tests do.
   playerAvailableClasses?: AircraftClass[];
+  // Soft ceiling on total open jobs. Client (branded) jobs are inserted
+  // unconditionally and persist far longer than open-market work, so without a
+  // ceiling the board accumulates well past `targetBoardSize`. Branded and
+  // deficit-fill open-market jobs respect this cap; only the home-origin floor
+  // may briefly overshoot it (see `generateOpenMarketJobs`). Omit for no cap
+  // (the back-compat default used by unit tests and the seed pre-warm).
+  maxBoardSize?: number;
+  // Floor on how many *flyable* branded jobs the board should hold. A fresh
+  // save has no accumulated client work, and the elapsed-based trickle is slow,
+  // so the first session would otherwise show a wall of anonymous open-market
+  // jobs. When the board is short, the generator force-surfaces flyable client
+  // work from eligible, in-season clients (weighted by their job rate, so
+  // seasonality still holds). Omit/0 to disable (the default).
+  minBrandedJobs?: number;
+  // Count of flyable branded jobs already on the board, paired with
+  // `minBrandedJobs` to decide the shortfall the floor must cover.
+  brandedJobCount?: number;
+  // Player's recent flight count per directed route (`routeKey(o, d)` →
+  // flights flown within the familiarity window). Drives the anti-"milk run"
+  // familiarity discount on a job's pay. Omit for no discount (the back-compat
+  // default used by unit tests and the seed pre-warm).
+  routeFlightCounts?: Record<string, number>;
 }
 
 export interface GeneratedJob {
@@ -207,7 +234,9 @@ function concretizeFromTemplate(
     isUnpavedRequired,
     isRemoteDestination: destAp.size === "remote",
     basePayMultiplier: template.basePayMultiplier,
-    familiarityDiscount: 0,
+    familiarityDiscount: familiarityDiscountForCount(
+      ctx.routeFlightCounts?.[routeKey(originIcao, destinationIcao)] ?? 0,
+    ),
     loyaltyBonus: loyaltyBonusForScore(clientRep),
   });
 
@@ -408,7 +437,9 @@ function buildOpenMarketJob(
     isUnpavedRequired: false,
     isRemoteDestination: destination.size === "remote",
     basePayMultiplier: 0.85,
-    familiarityDiscount: 0,
+    familiarityDiscount: familiarityDiscountForCount(
+      ctx.routeFlightCounts?.[routeKey(origin.icao, destination.icao)] ?? 0,
+    ),
     // Open-market jobs have no client relationship → no loyalty bonus.
     loyaltyBonus: 0,
   });
@@ -457,48 +488,153 @@ const MIN_HOME_ORIGIN_JOBS = 3;
 const OPEN_MARKET_PAY_FLOOR_CENTS = 40_000;
 
 export function generateOpenMarketJobs(ctx: GenerationContext): GeneratedJob[] {
-  const deficit = ctx.targetBoardSize - ctx.currentBoardSize;
-  if (deficit <= 0) return [];
-  const count = Math.min(deficit, MAX_OPEN_MARKET_PER_TICK);
+  const maxBoard = ctx.maxBoardSize ?? Infinity;
   const jobs: GeneratedJob[] = [];
-  // Home-airport floor: backfill home-origin jobs until the board holds at
-  // least MIN_HOME_ORIGIN_JOBS departing from the player's airport. Without
-  // this, the major-de-weighted origin pick leaves players at big airports
-  // (or quiet fields) with little to fly out. Forced jobs come first and are
-  // bounded by the per-tick open-market cap, so the board can take a few ticks
-  // to reach the floor rather than spawning a wall of home jobs at once.
+  let projected = ctx.currentBoardSize;
+  let made = 0;
+
+  // Home-airport floor: guarantee flyable departures from the player's current
+  // field. Without this, the major-de-weighted origin pick leaves players at
+  // big airports (or quiet fields) with little to fly out — and once branded
+  // work fills the board the deficit step below never runs, so a player who
+  // just repositioned to a client-less field would be stranded until jobs age
+  // out. The floor therefore runs *regardless of the deficit* and may briefly
+  // push the board past the soft ceiling; the overshoot is bounded by
+  // MIN_HOME_ORIGIN_JOBS and drains as short-lived open-market jobs expire.
   const homeForced = ctx.playerLocationIcao
     ? Math.max(0, MIN_HOME_ORIGIN_JOBS - (ctx.homeOriginJobCount ?? 0))
     : 0;
-  for (let i = 0; i < count; i++) {
-    const force = i < homeForced ? ctx.playerLocationIcao : undefined;
-    const job = buildOpenMarketJob(ctx, force);
-    if (job) jobs.push(job);
+  for (let i = 0; i < homeForced && made < MAX_OPEN_MARKET_PER_TICK; i++) {
+    const job = buildOpenMarketJob(ctx, ctx.playerLocationIcao);
+    if (job) {
+      jobs.push(job);
+      projected++;
+      made++;
+    }
+  }
+
+  // General deficit fill toward target — respects the soft ceiling and shares
+  // the per-tick open-market budget with the home floor above.
+  while (
+    projected < ctx.targetBoardSize &&
+    projected < maxBoard &&
+    made < MAX_OPEN_MARKET_PER_TICK
+  ) {
+    const job = buildOpenMarketJob(ctx);
+    if (!job) break;
+    jobs.push(job);
+    projected++;
+    made++;
   }
   return jobs;
+}
+
+// Force one flyable branded job from an eligible, in-season client, weighted by
+// each client's current job rate so seasonality and reputation gating still
+// shape which client surfaces. Used by the new-player branded floor. Returns
+// null when no eligible flyable client exists (e.g. every flyable client is
+// out of season), in which case the floor simply can't be met this tick.
+function forceFlyableBrandedJob(
+  clients: ClientDefinition[],
+  ctx: GenerationContext,
+  isFlyable: (cls: AircraftClass) => boolean,
+): GeneratedJob | null {
+  const month = new Date(ctx.simNow).getUTCMonth();
+  const eligible = clients
+    .map((client) => {
+      const repInRole = ctx.reputationByRole[client.role] ?? 0;
+      if (repInRole < client.reputationGateMin) return null;
+      const seasonal = client.seasonalMultipliers[month] ?? 1;
+      if (seasonal <= 0) return null;
+      const templates = client.standardTemplates.filter((t) =>
+        isFlyable(t.minClass),
+      );
+      if (templates.length === 0) return null;
+      const clientRep = ctx.reputationByClient[client.id] ?? 0;
+      const weight =
+        client.baseJobsPerDay *
+        seasonal *
+        jobFrequencyMultiplierForScore(clientRep);
+      if (weight <= 0) return null;
+      return { client, templates, weight };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  if (eligible.length === 0) return null;
+  const chosen = weightedPick(ctx.rng, eligible);
+  const template = weightedPick(ctx.rng, chosen.templates);
+  return concretizeFromTemplate(chosen.client, template, ctx);
 }
 
 export function runGenerationTick(
   clients: ClientDefinition[],
   ctx: GenerationContext,
 ): GeneratedJob[] {
+  const maxBoard = ctx.maxBoardSize ?? Infinity;
+  const isFlyable = (cls: AircraftClass): boolean =>
+    !ctx.playerAvailableClasses ||
+    ctx.playerAvailableClasses.length === 0 ||
+    ctx.playerAvailableClasses.includes(cls);
+
+  let projected = ctx.currentBoardSize;
+  let homeCount = ctx.homeOriginJobCount ?? 0;
   const jobs: GeneratedJob[] = [];
+
+  const admit = (job: GeneratedJob, cap: number): void => {
+    if (projected >= cap) return;
+    jobs.push(job);
+    projected++;
+    if (
+      ctx.playerLocationIcao != null &&
+      job.originIcao === ctx.playerLocationIcao
+    ) {
+      homeCount++;
+    }
+  };
+
+  // 1. Branded candidates from every eligible client (the elapsed-based trickle).
+  const candidates: GeneratedJob[] = [];
   for (const client of clients) {
-    jobs.push(...generateClientJobs(client, ctx));
+    candidates.push(...generateClientJobs(client, ctx));
   }
-  const projectedBoardSize = ctx.currentBoardSize + jobs.length;
-  // Roll forward the home-origin count so the open-market step doesn't
-  // double-up on a home job already produced by a client this tick.
-  const homeOriginAfterClients =
-    ctx.playerLocationIcao != null
-      ? (ctx.homeOriginJobCount ?? 0) +
-        jobs.filter((j) => j.originIcao === ctx.playerLocationIcao).length
-      : ctx.homeOriginJobCount;
+
+  // 2. Admit branded in priority order. Flyable client work fills up to the
+  // soft ceiling; jobs the player can't fly yet are admitted only into the
+  // lower "aspirational" band (below target) so a low-tier board surfaces the
+  // occasional upgrade-teaser without drowning in untakeable contracts.
+  for (const job of candidates) {
+    if (isFlyable(job.requiredClass)) admit(job, maxBoard);
+  }
+  for (const job of candidates) {
+    if (!isFlyable(job.requiredClass)) admit(job, ctx.targetBoardSize);
+  }
+
+  // 3. New-player branded floor: top up flyable client work to the minimum so a
+  // fresh save shows real clients, not a wall of anonymous jobs. No-op once the
+  // board has accumulated enough branded work (established players).
+  const minBranded = ctx.minBrandedJobs ?? 0;
+  if (minBranded > 0) {
+    const flyableBrandedOnBoard =
+      (ctx.brandedJobCount ?? 0) +
+      jobs.filter((j) => isFlyable(j.requiredClass)).length;
+    let shortfall = Math.min(
+      minBranded - flyableBrandedOnBoard,
+      maxBoard - projected,
+    );
+    while (shortfall-- > 0) {
+      const job = forceFlyableBrandedJob(clients, ctx, isFlyable);
+      if (!job) break;
+      admit(job, maxBoard);
+    }
+  }
+
+  // 4. Home-origin floor + open-market deficit fill, off the post-branded board
+  // size and home count so the open-market step doesn't double-count a home job
+  // a client already produced this tick.
   jobs.push(
     ...generateOpenMarketJobs({
       ...ctx,
-      currentBoardSize: projectedBoardSize,
-      homeOriginJobCount: homeOriginAfterClients,
+      currentBoardSize: projected,
+      homeOriginJobCount: homeCount,
     }),
   );
   return jobs;

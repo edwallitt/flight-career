@@ -46,6 +46,31 @@ const WEATHER_MULTIPLIER: Record<WeatherSensitivity, number> = {
   strict: 1.15,
 };
 
+// Familiarity (anti-"milk run") pricing. A directed route pays less the more
+// the player has recently flown it, nudging them to diversify rather than grind
+// one hop. Tuned gentle: 3% per recent flight, capped at 20%, so it never
+// erases a loyal client's loyalty bonus (which lives on a separate axis).
+export const FAMILIARITY_WINDOW_SIM_DAYS = 30;
+const FAMILIARITY_DISCOUNT_PER_FLIGHT = 0.03;
+export const MAX_FAMILIARITY_DISCOUNT = 0.2;
+
+/** Directed-route key for familiarity bookkeeping. */
+export function routeKey(originIcao: string, destinationIcao: string): string {
+  return `${originIcao}->${destinationIcao}`;
+}
+
+/**
+ * Familiarity discount (0–MAX_FAMILIARITY_DISCOUNT) for a route the player has
+ * flown `recentFlights` times inside the familiarity window.
+ */
+export function familiarityDiscountForCount(recentFlights: number): number {
+  if (recentFlights <= 0) return 0;
+  return Math.min(
+    MAX_FAMILIARITY_DISCOUNT,
+    recentFlights * FAMILIARITY_DISCOUNT_PER_FLIGHT,
+  );
+}
+
 export function calculatePay(inputs: PayInputs): number {
   const distancePay = inputs.distanceNm * CLASS_RATE_PER_NM[inputs.requiredClass];
 

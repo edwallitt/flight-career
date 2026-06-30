@@ -100,6 +100,36 @@ ticks produce nothing and a client surfaces work every few hours. Premium
 templates unlock at `repInRole >= (gateMin + gateMax) / 2`, then fire 25% of the
 time when unlocked. Open-market top-up is capped at +3/tick to avoid flooding.
 
+`runGenerationTick` is the **board-composition controller**, not just a sum of
+client + open-market jobs. Because branded jobs are inserted unconditionally and
+outlive open-market work (24–72h vs 4h) with no DB trim, they accumulate, so the
+controller bounds and shapes the board:
+
+- **Soft ceiling** (`maxBoardSize`, server `MAX_BOARD_SIZE = 14`): flyable
+  branded and deficit-fill open-market stop here. Without it the board balloons
+  to 20–26.
+- **Two-band flyable bias**: branded the player *can* fly fill up to the ceiling;
+  branded they *can't* (wrong class for their owned/rental options) are admitted
+  only below `targetBoardSize` — an aspirational teaser, not clutter. Uses
+  `playerAvailableClasses` (same signal as the open-market class roll).
+- **New-player branded floor** (`minBrandedJobs`, server `MIN_BRANDED_JOBS = 3`):
+  a fresh save has no accumulated client work, so the controller force-surfaces
+  flyable branded from eligible, in-season clients (weighted by job rate, so
+  seasonality still holds). No-op once the board has enough branded.
+- **Home-origin floor is an absolute guarantee** that may briefly *overshoot* the
+  ceiling (bounded by `MIN_HOME_ORIGIN_JOBS`): a player who just repositioned to
+  a client-less field gets immediate home departures rather than waiting up to
+  72h for non-home jobs to expire. The overshoot drains as 4h open-market work
+  ages out. This is why there's no DB trim.
+
+**Familiarity discount is live** (was a stub): a directed route pays less the
+more the player has recently flown it — `familiarityDiscountForCount(count)` =
+`min(20%, count × 3%)` over a `FAMILIARITY_WINDOW_SIM_DAYS` (30 sim-day) window.
+`jobBoard.loadRouteFlightCounts` aggregates the `flights` table and passes
+`routeFlightCounts` through `GenerationContext`; applied at both pay call sites.
+It coexists with the loyalty bonus (relationship axis) and is capped so it never
+erases loyalty.
+
 Tests: `packages/shared/src/jobs/__tests__/generator.test.ts` use `seedrandom`
 for deterministic fixtures.
 
@@ -200,10 +230,6 @@ hangar, marketplace, maintenance, insurance, and every route (`/hangar`,
 `alert(…)` stubs left in `apps/web`, and `ComingSoon` is no longer routed
 (component retained but dead). What genuinely remains inert:
 
-- **Familiarity discount** — passed to `calculatePay` but hardcoded to 0 at
-  both generator call sites (`generator.ts`). `reputationByClient` is wired
-  through `GenerationContext` for future use (premium gating, negotiation) but
-  doesn't affect pay yet.
 - **Rating exams resolve instantly** — `bookExam` (`services/career.ts`) grants
   the rating on payment of the fee once hour gates are met. The `rating_exams`
   scheduling schema (`scheduledFor`, `examLeadDays`, booked/failed states) is

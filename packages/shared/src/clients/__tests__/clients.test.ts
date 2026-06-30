@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALL_CLIENTS, getClientById } from "../index.js";
-import type { ClientDefinition, JobTemplate } from "../types.js";
+import type { ClientDefinition, JobTemplate, Role } from "../types.js";
 
 // Mirror of the ICAOs in apps/server/src/db/seed-data/airports.ts. Hard-coded
 // because the server seed lives downstream of this package.
@@ -64,6 +64,22 @@ describe("ALL_CLIENTS", () => {
       expect(c.reputationGateMin).toBeGreaterThanOrEqual(0);
       expect(c.reputationGateMax).toBeLessThanOrEqual(100);
       expect(c.reputationGateMin).toBeLessThan(c.reputationGateMax);
+    }
+  });
+
+  it("every role has at least one gate-0 bootstrap client", () => {
+    // Role reputation only ever rises by completing a branded job in that role
+    // (open-market work grants zero role rep), and start rep is 0. So a role
+    // whose clients all gate above 0 is permanently unreachable content — its
+    // rep can never leave 0, so none of its branded jobs can ever appear.
+    const ROLES: Role[] = ["bush", "air_taxi", "light_jet"];
+    for (const role of ROLES) {
+      const hasBootstrap = ALL_CLIENTS.some(
+        (c) => c.role === role && c.reputationGateMin === 0,
+      );
+      expect(hasBootstrap, `role ${role} has no gate-0 bootstrap client`).toBe(
+        true,
+      );
     }
   });
 

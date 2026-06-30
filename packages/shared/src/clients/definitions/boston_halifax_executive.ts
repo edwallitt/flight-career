@@ -11,7 +11,7 @@ const bostonHalifaxExecutive: ClientDefinition = {
   seasonalMultipliers: [
     0.8, 0.95, 1.1, 1.1, 1.05, 1.0, 0.9, 0.9, 1.15, 1.15, 1.05, 0.8,
   ],
-  reputationGateMin: 20,
+  reputationGateMin: 0,
   reputationGateMax: 70,
   standardTemplates: [
     {

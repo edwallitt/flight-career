@@ -4,6 +4,7 @@ import { db } from "../../db/client.js";
 import { career, jobs, reputation } from "../../db/schema.js";
 import {
   getCareer,
+  insertFlight,
   insertJob,
   insertOwnedAircraft,
   resetTestDb,
@@ -13,6 +14,7 @@ import {
   getOpenJobs,
   getOpenJobsWithReachability,
   getJobById,
+  loadRouteFlightCounts,
   tickJobGeneration,
 } from "../jobBoard.js";
 
@@ -160,6 +162,58 @@ describe("tickJobGeneration", () => {
       .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "ferry")))
       .all();
     expect(refilled.length).toBe(4);
+  });
+
+  it("holds the board under the soft ceiling even after many ticks", () => {
+    // Branded jobs are inserted unconditionally and outlive open-market work, so
+    // without the ceiling the board balloons past target. At a stable location
+    // (no repositioning) the home-origin floor never needs to overshoot, so the
+    // board stays at or below MAX_BOARD_SIZE.
+    for (let i = 0; i < 30; i++) tickJobGeneration();
+    const open = db.select().from(jobs).where(eq(jobs.status, "open")).all();
+    expect(open.length).toBeLessThanOrEqual(14); // MAX_BOARD_SIZE
+    expect(open.length).toBeGreaterThanOrEqual(12); // still fills to target
+  });
+
+  it("surfaces branded work immediately on a fresh board", () => {
+    // genElapsedMs is ~0 right after a reset, so the natural client trickle
+    // produces nothing — any branded jobs prove the new-player floor fired.
+    const result = tickJobGeneration();
+    expect(result.inserted).toBeGreaterThan(0);
+    const branded = db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.status, "open"), eq(jobs.jobType, "standard")))
+      .all()
+      .filter((j) => j.clientId != null);
+    expect(branded.length).toBeGreaterThan(0);
+  });
+});
+
+describe("loadRouteFlightCounts (familiarity signal)", () => {
+  beforeEach(() => resetTestDb());
+
+  it("counts flights per directed route inside the window", () => {
+    const now = getCareer().simDateTime;
+    insertFlight({ originIcao: "CYHZ", destinationIcao: "CYAW", endedAt: now });
+    insertFlight({ originIcao: "CYHZ", destinationIcao: "CYAW", endedAt: now });
+    insertFlight({ originIcao: "CYAW", destinationIcao: "CYHZ", endedAt: now });
+
+    const counts = loadRouteFlightCounts(now);
+    expect(counts["CYHZ->CYAW"]).toBe(2);
+    // Direction matters — the reverse leg is its own route.
+    expect(counts["CYAW->CYHZ"]).toBe(1);
+  });
+
+  it("excludes flights older than the familiarity window", () => {
+    const now = getCareer().simDateTime;
+    const justInside = now - 29 * 24 * 60 * 60 * 1000;
+    const wellOutside = now - 40 * 24 * 60 * 60 * 1000;
+    insertFlight({ originIcao: "CYHZ", destinationIcao: "CYAW", endedAt: justInside });
+    insertFlight({ originIcao: "CYHZ", destinationIcao: "CYAW", endedAt: wellOutside });
+
+    const counts = loadRouteFlightCounts(now);
+    expect(counts["CYHZ->CYAW"]).toBe(1); // only the in-window flight
   });
 });
 
